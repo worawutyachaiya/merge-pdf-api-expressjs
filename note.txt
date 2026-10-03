@@ -1,0 +1,7 @@
+จัดรูปแบบโค้ดด้วย Prettier:
+pnpm format
+
+ตรวจสอบโค้ดด้วย ESLint:
+pnpm lint
+
+pm2 start pm2.config.js

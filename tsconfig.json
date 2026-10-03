@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "CommonJS",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "baseUrl": "src",
+    "rootDir": "./src",
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "paths": {
+      "@src/*": ["*"],
+      "@controllers/*": ["_workspace/controllers/*"],
+      "@models/*": ["_workspace/models/*"],
+      "@businessData/*": ["businessData/*"],
+      "@routes/*": ["_workspace/routes/*"],
+      "@sql/*": ["_workspace/sql/*"],
+      "@services/*": ["_workspace/services/*"],
+      "@utils/*": ["utils/*"],
+      // "@types/*": ["types/*"],
+      "@helpers/*": ["helpers/*"],
+      "@_workspace/*": ["_workspace/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}

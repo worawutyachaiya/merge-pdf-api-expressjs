@@ -1,0 +1,400 @@
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+
+import { MySQLExecute } from '@src/businessData/dbExecute'
+import type { DocumentSummary, JobSummary, PageClassification, PageSummary, PublicationSummary } from '@src/_workspace/types/merge-pdf/MergePdf'
+
+interface JobRow extends RowDataPacket, JobSummary {}
+interface DocumentRow extends RowDataPacket, DocumentSummary {}
+interface PageRow extends RowDataPacket, PageSummary {}
+interface PublicationRow extends RowDataPacket, PublicationSummary {}
+interface BlobRow extends RowDataPacket {
+  DOCUMENT_ID: number
+  NORMALIZED_PDF_BYTES: Buffer
+}
+interface BinaryRow extends RowDataPacket {
+  OUTPUT_PDF_BYTES: Buffer
+  OUTPUT_FILE_NAME: string
+}
+interface PendingRow extends BinaryRow {
+  PUBLICATION_ID: number
+}
+interface PageSourceRow extends RowDataPacket {
+  SOURCE_PAGE_NUMBER: number
+  ROTATION_DEGREES: number
+  NORMALIZED_PDF_BYTES: Buffer
+}
+interface PageThumbnailRow extends RowDataPacket {
+  DOCUMENT_ID: number
+  SOURCE_PAGE_NUMBER: number
+  ROTATION_DEGREES: number
+  PDF_PAGE_COUNT: number
+}
+interface CountRow extends RowDataPacket {
+  NEXT_VALUE: number
+}
+interface TotalRow extends RowDataPacket {
+  TOTAL: number
+}
+interface CategoryIdRow extends RowDataPacket {
+  CATEGORY_ID: number
+}
+
+const jobSelect = `
+  SELECT J.JOB_ID, J.INUSE, J.JOB_CODE, J.JOB_TITLE, J.JOB_REFERENCE, J.STATUS, J.ROW_VERSION,
+    J.UPDATE_DATE, J.UPDATE_BY,
+    (SELECT COUNT(*) FROM MERGE_PDF_DOCUMENT D WHERE D.JOB_ID = J.JOB_ID AND D.INUSE = 1) AS DOCUMENT_COUNT,
+    (SELECT COUNT(*) FROM MERGE_PDF_PAGE P WHERE P.JOB_ID = J.JOB_ID AND P.INUSE = 1) AS PAGE_COUNT
+  FROM MERGE_PDF_JOB J`
+
+export const MergePdfRepository = {
+  getRequiredCategoryIds: async (conn: PoolConnection): Promise<number[]> => {
+    const [rows] = await conn.query<CategoryIdRow[]>('SELECT CATEGORY_ID FROM MERGE_PDF_CATEGORY WHERE INUSE = 1 AND REQUIRED_FOR_COMPLETE = 1 ORDER BY SORT_ORDER')
+    return rows.map((row) => row.CATEGORY_ID)
+  },
+
+  listJobs: async (
+    search: string,
+    status: 'ALL' | 'DRAFT' | 'COMPLETED',
+    page: number,
+    pageSize: number,
+    titleFilter: string,
+    updateByFilter: string,
+    sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY',
+    sortDesc: boolean
+  ): Promise<{ rows: JobRow[]; total: number }> => {
+    const where = `WHERE J.INUSE = 1 AND (? = '' OR J.JOB_TITLE LIKE ? OR J.JOB_CODE LIKE ?)
+      AND (? = 'ALL' OR J.STATUS = ?) AND (? = '' OR J.JOB_TITLE LIKE ?)
+      AND (? = '' OR J.UPDATE_BY LIKE ?)`
+    const params = [search, `%${search}%`, `%${search}%`, status, status, titleFilter, `%${titleFilter}%`, updateByFilter, `%${updateByFilter}%`]
+    const sortColumns = {
+      JOB_TITLE: 'J.JOB_TITLE',
+      STATUS: 'J.STATUS',
+      DOCUMENT_COUNT: 'DOCUMENT_COUNT',
+      PAGE_COUNT: 'PAGE_COUNT',
+      UPDATE_DATE: 'J.UPDATE_DATE',
+      UPDATE_BY: 'J.UPDATE_BY',
+    } as const
+    const orderBy = `${sortColumns[sortBy]} ${sortDesc ? 'DESC' : 'ASC'}, J.JOB_ID DESC`
+    const [rows, counts] = await Promise.all([
+      MySQLExecute.queryParams<JobRow[]>(`${jobSelect} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]),
+      MySQLExecute.queryParams<TotalRow[]>(`SELECT COUNT(*) AS TOTAL FROM MERGE_PDF_JOB J ${where}`, params),
+    ])
+    return { rows, total: counts[0].TOTAL }
+  },
+
+  getJob: async (jobId: number, conn?: PoolConnection): Promise<JobRow | undefined> => {
+    const sql = `${jobSelect} WHERE J.JOB_ID = ? AND J.INUSE = 1`
+    const rows = conn ? (await conn.query<JobRow[]>(sql, [jobId]))[0] : await MySQLExecute.queryParams<JobRow[]>(sql, [jobId])
+    return rows[0]
+  },
+
+  lockJob: async (conn: PoolConnection, jobId: number): Promise<JobRow | undefined> => {
+    const [rows] = await conn.query<JobRow[]>(`${jobSelect} WHERE J.JOB_ID = ? AND J.INUSE = 1 FOR UPDATE`, [jobId])
+    return rows[0]
+  },
+
+  getDocuments: async (jobId: number, conn?: PoolConnection): Promise<DocumentRow[]> => {
+    const sql = `SELECT D.DOCUMENT_ID, D.JOB_ID, D.CATEGORY_ID, C.CATEGORY_NAME,
+      D.ORIGINAL_FILE_NAME, D.SOURCE_TYPE, D.PDF_PAGE_COUNT, D.ENTRY_STATUS_CODE,
+      D.ENTRY_STATUS_SOURCE, D.UPLOAD_ORDER
+      FROM MERGE_PDF_DOCUMENT D JOIN MERGE_PDF_CATEGORY C ON C.CATEGORY_ID = D.CATEGORY_ID
+      WHERE D.JOB_ID = ? AND D.INUSE = 1 AND C.INUSE = 1 ORDER BY C.SORT_ORDER, D.UPLOAD_ORDER`
+    return conn ? (await conn.query<DocumentRow[]>(sql, [jobId]))[0] : MySQLExecute.queryParams<DocumentRow[]>(sql, [jobId])
+  },
+
+  getPages: async (jobId: number, conn?: PoolConnection): Promise<PageRow[]> => {
+    const sql = `SELECT P.PAGE_ID, P.DOCUMENT_ID, P.SOURCE_PAGE_NUMBER, P.ROTATION_DEGREES, P.SORT_ORDER,
+      COALESCE(P.CATEGORY_ID, D.CATEGORY_ID) AS CATEGORY_ID,
+      P.CLASSIFICATION_SOURCE, P.CLASSIFICATION_CONFIDENCE
+      FROM MERGE_PDF_PAGE P JOIN MERGE_PDF_DOCUMENT D ON D.DOCUMENT_ID = P.DOCUMENT_ID
+      WHERE P.JOB_ID = ? AND P.INUSE = 1 AND D.INUSE = 1 ORDER BY P.SORT_ORDER`
+    return conn ? (await conn.query<PageRow[]>(sql, [jobId]))[0] : MySQLExecute.queryParams<PageRow[]>(sql, [jobId])
+  },
+
+  getPublications: (jobId: number): Promise<PublicationRow[]> =>
+    MySQLExecute.queryParams<PublicationRow[]>(
+      `SELECT PUBLICATION_ID, PUBLICATION_VERSION, STATUS, OUTPUT_FILE_NAME, NETWORK_PATH, PUBLISHED_AT
+     FROM MERGE_PDF_PUBLICATION WHERE JOB_ID = ? AND INUSE = 1 ORDER BY PUBLICATION_VERSION DESC`,
+      [jobId]
+    ),
+
+  getDocumentPdf: async (documentId: number): Promise<Buffer | undefined> => {
+    const rows = await MySQLExecute.queryParams<BlobRow[]>(
+      `SELECT D.DOCUMENT_ID, D.NORMALIZED_PDF_BYTES FROM MERGE_PDF_DOCUMENT D
+       JOIN MERGE_PDF_JOB J ON J.JOB_ID = D.JOB_ID
+       WHERE D.DOCUMENT_ID = ? AND D.INUSE = 1 AND J.INUSE = 1`,
+      [documentId]
+    )
+    return rows[0]?.NORMALIZED_PDF_BYTES
+  },
+
+  getPagePdfSource: async (jobId: number, pageId: number): Promise<PageSourceRow | undefined> => {
+    const rows = await MySQLExecute.queryParams<PageSourceRow[]>(
+      `SELECT P.SOURCE_PAGE_NUMBER, P.ROTATION_DEGREES, D.NORMALIZED_PDF_BYTES
+       FROM MERGE_PDF_PAGE P
+       JOIN MERGE_PDF_DOCUMENT D ON D.DOCUMENT_ID = P.DOCUMENT_ID
+       JOIN MERGE_PDF_JOB J ON J.JOB_ID = P.JOB_ID
+       WHERE P.JOB_ID = ? AND P.PAGE_ID = ? AND P.INUSE = 1 AND D.INUSE = 1 AND J.INUSE = 1`,
+      [jobId, pageId]
+    )
+    return rows[0]
+  },
+
+  getPageThumbnailSource: async (jobId: number, pageId: number): Promise<PageThumbnailRow | undefined> => {
+    const rows = await MySQLExecute.queryParams<PageThumbnailRow[]>(
+      `SELECT P.DOCUMENT_ID, P.SOURCE_PAGE_NUMBER, P.ROTATION_DEGREES, D.PDF_PAGE_COUNT
+       FROM MERGE_PDF_PAGE P
+       JOIN MERGE_PDF_DOCUMENT D ON D.DOCUMENT_ID = P.DOCUMENT_ID
+       JOIN MERGE_PDF_JOB J ON J.JOB_ID = P.JOB_ID
+       WHERE P.JOB_ID = ? AND P.PAGE_ID = ? AND P.INUSE = 1 AND D.INUSE = 1 AND J.INUSE = 1`,
+      [jobId, pageId]
+    )
+    return rows[0]
+  },
+
+  getPublicationPdf: async (jobId: number, publicationId: number): Promise<BinaryRow | undefined> => {
+    const rows = await MySQLExecute.queryParams<BinaryRow[]>(
+      `SELECT P.OUTPUT_PDF_BYTES, P.OUTPUT_FILE_NAME FROM MERGE_PDF_PUBLICATION P
+       JOIN MERGE_PDF_JOB J ON J.JOB_ID = P.JOB_ID
+       WHERE P.JOB_ID = ? AND P.PUBLICATION_ID = ? AND P.STATUS = 'PUBLISHED'
+       AND P.INUSE = 1 AND J.INUSE = 1`,
+      [jobId, publicationId]
+    )
+    return rows[0]
+  },
+
+  getPendingPublication: async (jobId: number): Promise<PendingRow | undefined> => {
+    const rows = await MySQLExecute.queryParams<PendingRow[]>(
+      `SELECT PUBLICATION_ID, OUTPUT_FILE_NAME, OUTPUT_PDF_BYTES
+       FROM MERGE_PDF_PUBLICATION WHERE JOB_ID = ? AND STATUS = 'PENDING' AND INUSE = 1
+       ORDER BY PUBLICATION_VERSION DESC LIMIT 1`,
+      [jobId]
+    )
+    return rows[0]
+  },
+
+  insertJob: async (conn: PoolConnection, code: string, title: string, reference: string | null): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `INSERT INTO MERGE_PDF_JOB (JOB_CODE, JOB_TITLE, JOB_REFERENCE, CREATE_BY, UPDATE_BY)
+       VALUES (?, ?, ?, 'DEV_LOCAL', 'DEV_LOCAL')`,
+      [code, title, reference]
+    )
+    return result.insertId
+  },
+
+  updateJob: async (conn: PoolConnection, jobId: number, title: string, reference: string | null): Promise<void> => {
+    await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_JOB SET JOB_TITLE = ?, JOB_REFERENCE = ?, STATUS = 'DRAFT',
+       ROW_VERSION = ROW_VERSION + 1, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1`,
+      [title, reference, jobId]
+    )
+  },
+
+  bumpJob: async (conn: PoolConnection, jobId: number): Promise<void> => {
+    await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_JOB SET STATUS = 'DRAFT', ROW_VERSION = ROW_VERSION + 1,
+       UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1`,
+      [jobId]
+    )
+  },
+
+  insertDocument: async (
+    conn: PoolConnection,
+    input: {
+      jobId: number
+      categoryId: number
+      uploadOrder: number
+      fileName: string
+      sourceType: string
+      sourceMime: string
+      original: Buffer
+      normalized: Buffer
+      originalHash: Buffer
+      normalizedHash: Buffer
+      pageCount: number
+      entryStatusCode: string | null
+    }
+  ): Promise<number> => {
+    const [result] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO MERGE_PDF_DOCUMENT (
+        JOB_ID, CATEGORY_ID, UPLOAD_ORDER, ORIGINAL_FILE_NAME, SOURCE_TYPE, SOURCE_MIME,
+        ORIGINAL_SIZE_BYTES, ORIGINAL_SHA256, ORIGINAL_BYTES, NORMALIZED_PDF_SIZE_BYTES,
+        NORMALIZED_PDF_SHA256, NORMALIZED_PDF_BYTES, PDF_PAGE_COUNT,
+        ENTRY_STATUS_CODE, ENTRY_STATUS_SOURCE, CREATE_BY, UPDATE_BY
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, X'', ?, ?, X'', ?, ?, ?, 'DEV_LOCAL', 'DEV_LOCAL')`,
+      [
+        input.jobId,
+        input.categoryId,
+        input.uploadOrder,
+        input.fileName,
+        input.sourceType,
+        input.sourceMime,
+        input.original.length,
+        input.originalHash,
+        input.normalized.length,
+        input.normalizedHash,
+        input.pageCount,
+        input.entryStatusCode,
+        input.entryStatusCode ? 'USER' : null,
+      ]
+    )
+    // mysql2's prepared binary serializer fails on larger PDF Buffers. Each BASE64
+    // update stays below the development server's 64 MiB packet limit.
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET ORIGINAL_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ?', [input.original.toString('base64'), result.insertId])
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET NORMALIZED_PDF_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ?', [
+      input.normalized.toString('base64'),
+      result.insertId,
+    ])
+    return result.insertId
+  },
+
+  nextUploadOrder: async (conn: PoolConnection, jobId: number): Promise<number> => {
+    const [rows] = await conn.query<CountRow[]>('SELECT COALESCE(MAX(UPLOAD_ORDER), 0) + 1 AS NEXT_VALUE FROM MERGE_PDF_DOCUMENT WHERE JOB_ID = ?', [jobId])
+    return rows[0].NEXT_VALUE
+  },
+
+  nextPageOrder: async (conn: PoolConnection, jobId: number): Promise<number> => {
+    const [rows] = await conn.query<CountRow[]>('SELECT COALESCE(MAX(SORT_ORDER), 0) + 1 AS NEXT_VALUE FROM MERGE_PDF_PAGE WHERE JOB_ID = ? AND INUSE = 1', [jobId])
+    return rows[0].NEXT_VALUE
+  },
+
+  insertPages: async (
+    conn: PoolConnection,
+    jobId: number,
+    documentId: number,
+    count: number,
+    firstOrder: number,
+    classifications?: readonly PageClassification[]
+  ): Promise<void> => {
+    if (classifications && classifications.length !== count) throw new Error('Page classification count mismatch')
+    for (let index = 0; index < count; index += 1) {
+      const classification = classifications?.[index]
+      await conn.query<ResultSetHeader>(
+        `INSERT INTO MERGE_PDF_PAGE
+         (JOB_ID, DOCUMENT_ID, CATEGORY_ID, CLASSIFICATION_SOURCE, CLASSIFICATION_CONFIDENCE,
+          SOURCE_PAGE_NUMBER, SORT_ORDER, CREATE_BY, UPDATE_BY)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'DEV_LOCAL', 'DEV_LOCAL')`,
+        [jobId, documentId, classification?.categoryId ?? null, classification?.source ?? null, classification?.confidence ?? null, index + 1, firstOrder + index]
+      )
+    }
+  },
+
+  updatePageCategory: async (conn: PoolConnection, jobId: number, pageId: number, categoryId: number): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_PAGE SET CATEGORY_ID = ?, CLASSIFICATION_SOURCE = 'USER',
+       CLASSIFICATION_CONFIDENCE = NULL, UPDATE_BY = 'DEV_LOCAL'
+       WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1`,
+      [categoryId, jobId, pageId]
+    )
+    return result.affectedRows
+  },
+
+  rotatePage: async (conn: PoolConnection, jobId: number, pageId: number, delta: 90 | 270): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_PAGE SET ROTATION_DEGREES = MOD(ROTATION_DEGREES + ?, 360), UPDATE_BY = 'DEV_LOCAL'
+       WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1`,
+      [delta, jobId, pageId]
+    )
+    return result.affectedRows
+  },
+
+  softDeletePage: async (conn: PoolConnection, jobId: number, pageId: number): Promise<number | undefined> => {
+    const [rows] = await conn.query<(RowDataPacket & { DOCUMENT_ID: number })[]>(
+      'SELECT DOCUMENT_ID FROM MERGE_PDF_PAGE WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1 FOR UPDATE',
+      [jobId, pageId]
+    )
+    if (!rows[0]) return undefined
+    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1", [
+      jobId,
+      pageId,
+    ])
+    return rows[0].DOCUMENT_ID
+  },
+
+  countActiveDocumentPages: async (conn: PoolConnection, documentId: number): Promise<number> => {
+    const [rows] = await conn.query<CountRow[]>('SELECT COUNT(*) AS NEXT_VALUE FROM MERGE_PDF_PAGE WHERE DOCUMENT_ID = ? AND INUSE = 1', [documentId])
+    return rows[0].NEXT_VALUE
+  },
+
+  reorderPages: async (conn: PoolConnection, jobId: number, ids: readonly number[]): Promise<void> => {
+    const start = await MergePdfRepository.nextPageOrder(conn, jobId)
+    for (let index = 0; index < ids.length; index += 1) {
+      await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PAGE SET SORT_ORDER = ?, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1", [
+        start + index,
+        jobId,
+        ids[index],
+      ])
+    }
+    for (let index = 0; index < ids.length; index += 1) {
+      await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PAGE SET SORT_ORDER = ?, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1", [
+        index + 1,
+        jobId,
+        ids[index],
+      ])
+    }
+  },
+
+  softDeleteDocument: async (conn: PoolConnection, jobId: number, documentId: number): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_DOCUMENT SET INUSE = 0, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1", [
+      jobId,
+      documentId,
+    ])
+    if (result.affectedRows === 1) {
+      await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1", [
+        jobId,
+        documentId,
+      ])
+    }
+    return result.affectedRows
+  },
+
+  updateEntryStatus: async (conn: PoolConnection, jobId: number, documentId: number, statusCode: string | null): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_DOCUMENT SET ENTRY_STATUS_CODE = ?, ENTRY_STATUS_SOURCE = ?, UPDATE_BY = 'DEV_LOCAL'
+       WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND CATEGORY_ID IN (1, 10) AND INUSE = 1`,
+      [statusCode, statusCode ? 'USER' : null, jobId, documentId]
+    )
+    return result.affectedRows
+  },
+
+  getAllPdfBytes: async (conn: PoolConnection, jobId: number): Promise<BlobRow[]> => {
+    const [rows] = await conn.query<BlobRow[]>('SELECT DOCUMENT_ID, NORMALIZED_PDF_BYTES FROM MERGE_PDF_DOCUMENT WHERE JOB_ID = ? AND INUSE = 1', [jobId])
+    return rows
+  },
+
+  nextPublicationVersion: async (conn: PoolConnection, jobId: number): Promise<number> => {
+    const [rows] = await conn.query<CountRow[]>(
+      `SELECT COALESCE(MAX(PUBLICATION_VERSION), 0) + 1 AS NEXT_VALUE
+       FROM MERGE_PDF_PUBLICATION WHERE JOB_ID = ?`,
+      [jobId]
+    )
+    return rows[0].NEXT_VALUE
+  },
+
+  insertPublication: async (conn: PoolConnection, jobId: number, version: number, fileName: string, bytes: Buffer, hash: Buffer, pageCount: number): Promise<number> => {
+    const [result] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO MERGE_PDF_PUBLICATION
+       (JOB_ID, PUBLICATION_VERSION, OUTPUT_FILE_NAME, OUTPUT_SIZE_BYTES, OUTPUT_SHA256,
+        OUTPUT_PDF_BYTES, OUTPUT_PAGE_COUNT, CREATE_BY, UPDATE_BY)
+       VALUES (?, ?, ?, ?, ?, X'', ?, 'DEV_LOCAL', 'DEV_LOCAL')`,
+      [jobId, version, fileName, bytes.length, hash, pageCount]
+    )
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PUBLICATION SET OUTPUT_PDF_BYTES = FROM_BASE64(?) WHERE PUBLICATION_ID = ?', [bytes.toString('base64'), result.insertId])
+    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_JOB SET STATUS = 'COMPLETING', UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1", [jobId])
+    return result.insertId
+  },
+
+  finishPublication: async (conn: PoolConnection, jobId: number, publicationId: number, networkPath: string | null): Promise<void> => {
+    await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_PUBLICATION SET STATUS = ?, NETWORK_PATH = ?, PUBLISHED_AT = ?, FAILURE_CODE = ?, UPDATE_BY = 'DEV_LOCAL'
+       WHERE JOB_ID = ? AND PUBLICATION_ID = ? AND INUSE = 1`,
+      [networkPath ? 'PUBLISHED' : 'FAILED', networkPath, networkPath ? new Date() : null, networkPath ? null : 'NETWORK_WRITE_FAILED', jobId, publicationId]
+    )
+    await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_JOB SET STATUS = ?, ROW_VERSION = ROW_VERSION + 1,
+       LAST_COMPLETED_AT = CASE WHEN ? IS NULL THEN LAST_COMPLETED_AT ELSE CURRENT_TIMESTAMP(3) END,
+       UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1`,
+      [networkPath ? 'COMPLETED' : 'DRAFT', networkPath, jobId]
+    )
+  },
+}
