@@ -198,6 +198,18 @@ export const MergePdfRepository = {
     )
   },
 
+  softDeleteDraft: async (conn: PoolConnection, jobId: number): Promise<void> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_JOB SET INUSE = 0, ROW_VERSION = ROW_VERSION + 1, UPDATE_BY = 'DEV_LOCAL'
+       WHERE JOB_ID = ? AND INUSE = 1 AND STATUS = 'DRAFT'`,
+      [jobId]
+    )
+    if (result.affectedRows !== 1) throw new Error('Active draft not found')
+    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1", [jobId])
+    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_DOCUMENT SET INUSE = 0, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1", [jobId])
+    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_PUBLICATION SET INUSE = 0, UPDATE_BY = 'DEV_LOCAL' WHERE JOB_ID = ? AND INUSE = 1", [jobId])
+  },
+
   insertDocument: async (
     conn: PoolConnection,
     input: {

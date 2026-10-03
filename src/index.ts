@@ -24,7 +24,7 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }))
 app.use(cors())
 
 // * Routes
-app.get('/', (req: Request, res: Response) => {
+app.post('/', (req: Request, res: Response) => {
   res.send(`
 🐱 Server is running
   - URL               : http://localhost:${PORT}${prefix}
@@ -34,7 +34,7 @@ app.get('/', (req: Request, res: Response) => {
   `)
 })
 
-app.get(prefix, (req: Request, res: Response) => {
+app.post(prefix, (req: Request, res: Response) => {
   res.send(`
 🐱 Server is running
   - URL               : http://localhost:${PORT}${prefix}

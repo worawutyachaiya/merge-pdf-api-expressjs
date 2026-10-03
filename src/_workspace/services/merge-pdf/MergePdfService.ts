@@ -107,6 +107,15 @@ export const MergePdfService = {
     return detail(jobId)
   },
 
+  deleteDraft: async (jobId: number, expectedVersion: number): Promise<{ JOB_ID: number }> => {
+    await MySQLExecute.withTransaction(async (conn) => {
+      const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      if (job.STATUS !== 'DRAFT') throw new MergePdfError('Only Draft documents can be deleted', 409)
+      await repo.softDeleteDraft(conn, jobId)
+    })
+    return { JOB_ID: jobId }
+  },
+
   addDocument: async (jobId: number, expectedVersion: number, categoryId: number, entryStatusCode: string | null, fileName: string, bytes: Buffer): Promise<JobDetail> => {
     if (categoryId !== 1 && entryStatusCode) throw new MergePdfError('Status applies only to import entry', 400)
     if (fileName.length < 1 || fileName.length > 255) throw new MergePdfError('File name is too long', 400)

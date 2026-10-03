@@ -87,8 +87,8 @@ router.use((req, res, next) => {
   next()
 })
 
-router.get(
-  '/jobs',
+router.post(
+  '/jobs/search',
   safe('List Merge PDF jobs', async (req, res) => {
     const filters = z
       .object({
@@ -99,12 +99,9 @@ router.get(
         titleFilter: z.string().max(255).default(''),
         updateByFilter: z.string().max(100).default(''),
         sortBy: z.enum(['JOB_TITLE', 'STATUS', 'DOCUMENT_COUNT', 'PAGE_COUNT', 'UPDATE_DATE', 'UPDATE_BY']).default('UPDATE_DATE'),
-        sortDesc: z
-          .enum(['true', 'false'])
-          .transform((value) => value === 'true')
-          .default('true'),
+        sortDesc: z.boolean().default(true),
       })
-      .parse(req.query)
+      .parse(req.body)
     const result = await MergePdfService.list(
       filters.search.trim(),
       filters.status,
@@ -120,25 +117,33 @@ router.get(
 )
 
 router.post(
-  '/jobs',
+  '/jobs/create',
   safe('Create Merge PDF job', async (req, res) => {
     const fields = jobFields.parse(req.body)
     respond(res, await MergePdfService.create(fields.title, fields.reference), 'Create Merge PDF job', 201)
   })
 )
 
-router.get(
-  '/jobs/:jobId',
+router.post(
+  '/jobs/:jobId/detail',
   safe('View Merge PDF job', async (req, res) => {
     respond(res, await MergePdfService.detail(id.parse(req.params.jobId)), 'View Merge PDF job')
   })
 )
 
-router.patch(
-  '/jobs/:jobId',
+router.post(
+  '/jobs/:jobId/save-draft',
   safe('Save Merge PDF draft', async (req, res) => {
     const fields = editFields.parse(req.body)
     respond(res, await MergePdfService.saveDraft(id.parse(req.params.jobId), fields.rowVersion, fields.title, fields.reference), 'Save Merge PDF draft')
+  })
+)
+
+router.post(
+  '/jobs/:jobId/delete-draft',
+  safe('Delete Merge PDF draft', async (req, res) => {
+    const fields = versionFields.parse(req.body)
+    respond(res, await MergePdfService.deleteDraft(id.parse(req.params.jobId), fields.rowVersion), 'Delete Merge PDF draft')
   })
 )
 
@@ -172,7 +177,7 @@ router.post(
   })
 )
 
-router.patch(
+router.post(
   '/jobs/:jobId/pages/:pageId/category',
   safe('Classify Merge PDF page', async (req, res) => {
     const fields = pageCategoryFields.parse(req.body)
@@ -180,7 +185,7 @@ router.patch(
   })
 )
 
-router.patch(
+router.post(
   '/jobs/:jobId/pages/:pageId/rotation',
   safe('Rotate Merge PDF page', async (req, res) => {
     const fields = pageRotationFields.parse(req.body)
@@ -188,23 +193,23 @@ router.patch(
   })
 )
 
-router.delete(
-  '/jobs/:jobId/pages/:pageId',
+router.post(
+  '/jobs/:jobId/pages/:pageId/remove',
   safe('Remove Merge PDF page', async (req, res) => {
     const fields = versionFields.parse(req.body)
     respond(res, await MergePdfService.removePage(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion), 'Remove Merge PDF page')
   })
 )
 
-router.delete(
-  '/jobs/:jobId/documents/:documentId',
+router.post(
+  '/jobs/:jobId/documents/:documentId/remove',
   safe('Remove Merge PDF document', async (req, res) => {
     const fields = versionFields.parse(req.body)
     respond(res, await MergePdfService.removeDocument(id.parse(req.params.jobId), id.parse(req.params.documentId), fields.rowVersion), 'Remove Merge PDF document')
   })
 )
 
-router.patch(
+router.post(
   '/jobs/:jobId/documents/:documentId/status',
   safe('Update import entry status', async (req, res) => {
     const fields = entryStatusFields.parse(req.body)
@@ -216,8 +221,8 @@ router.patch(
   })
 )
 
-router.put(
-  '/jobs/:jobId/pages',
+router.post(
+  '/jobs/:jobId/pages/reorder',
   safe('Reorder Merge PDF pages', async (req, res) => {
     const fields = reorderFields.parse(req.body)
     respond(res, await MergePdfService.reorder(id.parse(req.params.jobId), fields.rowVersion, fields.pageIds), 'Reorder Merge PDF pages')
@@ -232,7 +237,7 @@ router.post(
   })
 )
 
-router.get(
+router.post(
   '/documents/:documentId/preview',
   safe('Preview Merge PDF document', async (req, res) => {
     const bytes = await MergePdfService.documentPdf(id.parse(req.params.documentId))
@@ -242,7 +247,7 @@ router.get(
   })
 )
 
-router.get(
+router.post(
   '/jobs/:jobId/pages/:pageId/preview',
   safe('Preview Merge PDF page', async (req, res) => {
     const bytes = await MergePdfService.pagePdf(id.parse(req.params.jobId), id.parse(req.params.pageId))
@@ -253,7 +258,7 @@ router.get(
   })
 )
 
-router.get(
+router.post(
   '/jobs/:jobId/pages/:pageId/thumbnail',
   safe('Thumbnail Merge PDF page', async (req, res) => {
     const bytes = await getPageThumbnail(id.parse(req.params.jobId), id.parse(req.params.pageId))
@@ -263,7 +268,7 @@ router.get(
   })
 )
 
-router.get(
+router.post(
   '/jobs/:jobId/publications/:publicationId/pdf',
   safe('Download merged PDF', async (req, res) => {
     const result = await MergePdfService.publicationPdf(id.parse(req.params.jobId), id.parse(req.params.publicationId))
