@@ -1,6 +1,6 @@
 # Merge PDF setup
 
-Run `src/_workspace/sql/merge-pdf/schema.sql` to create the complete `merge_pdf` database,
+Run `src/_workspace/sql/merge-pdf/schema.sql` to create the complete `_sit_merge_pdf_worawut_2026_09_30` database,
 all Merge PDF tables, constraints, indexes and the ten document categories. It preserves existing
 tables and data and creates missing tables and seed rows. Change the database name in CREATE DATABASE
 and USE if needed, and set the API's DB configuration to that name. It is a complete schema file,
