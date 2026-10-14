@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
@@ -7,8 +6,7 @@ import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergeP
 import type { JobDetail, JobSummary, PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
 
 import { extractPage, mergePages, normalizeFile, type NormalizedFile } from './PdfEngine'
-
-const getDevelopmentShare = (): string => process.env.MERGE_PDF_DEVELOPMENT_SHARE || '\\\\192.168.14.35\\C12\\_PM-Support\\MergePDF\\_TEST'
+import { checkOutputDirectory, getOutputDirectory, publishPdf } from './PublicationStorage'
 
 export class MergePdfError extends Error {
   constructor(
@@ -230,6 +228,7 @@ export const MergePdfService = {
   },
 
   complete: async (jobId: number, expectedVersion: number): Promise<JobDetail> => {
+    const outputDirectory = getOutputDirectory()
     const current = await repo.getJob(jobId)
     if (!current) throw new MergePdfError('Job not found', 404)
     if (current.ROW_VERSION !== expectedVersion) throw new MergePdfError('Job changed. Reload and try again', 409)
@@ -259,6 +258,12 @@ export const MergePdfService = {
             throw new MergePdfError('Every import entry must have status 04', 400)
           }
           if (pages.length === 0) throw new MergePdfError('Add at least one page', 400)
+          try {
+            await checkOutputDirectory(outputDirectory)
+          } catch (error) {
+            console.error('Merge PDF output check failed:', error)
+            throw new MergePdfError(error instanceof Error ? error.message : 'PDF output folder is unavailable', 503)
+          }
           const pdf = await mergePages(
             pages.map((page) => ({
               documentId: page.DOCUMENT_ID,
@@ -272,20 +277,16 @@ export const MergePdfService = {
           return { publicationId, pdf, fileName }
         })
 
-    const finalPath = path.win32.join(getDevelopmentShare(), publication.fileName)
-    const tempPath = `${finalPath}.${randomUUID()}.tmp`
     let publishedPath: string | null = null
+    let failureMessage = 'Could not save merged PDF to the output folder'
     try {
-      await writeFile(tempPath, publication.pdf, { flag: 'wx' })
-      await rename(tempPath, finalPath)
-      publishedPath = finalPath
-    } catch {
-      await unlink(tempPath).catch(() => undefined)
-      const existing = await readFile(finalPath).catch(() => null)
-      if (existing && sha256(existing).equals(sha256(publication.pdf))) publishedPath = finalPath
+      publishedPath = await publishPdf(outputDirectory, publication.fileName, publication.pdf)
+    } catch (error) {
+      console.error('Merge PDF publication failed:', error)
+      if (error instanceof Error) failureMessage = error.message
     }
     await MySQLExecute.withTransaction((conn) => repo.finishPublication(conn, jobId, publication.publicationId, publishedPath))
-    if (!publishedPath) throw new MergePdfError('Could not write merged PDF to the development share', 503)
+    if (!publishedPath) throw new MergePdfError(failureMessage, 503)
     return detail(jobId)
   },
 

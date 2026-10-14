@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "check:storage": "cross-env NODE_ENV=development tsx scripts/check-merge-pdf-storage.ts",
+    "verify:storage": "tsx scripts/verify-merge-pdf-storage.ts",
+    "verify:share": "cross-env NODE_ENV=development tsx scripts/verify-merge-pdf-share.ts",
     "dev_": "cross-env NODE_ENV=development esr src/index.ts",
     "dev__": "cross-env NODE_ENV=development ts-node-dev --respawn --transpile-only --require tsconfig-paths/register src/index.ts",
     "dev": "cross-env NODE_ENV=development tsx watch src/index.ts",
