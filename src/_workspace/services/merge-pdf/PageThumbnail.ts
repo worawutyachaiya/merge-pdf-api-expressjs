@@ -1,39 +1,48 @@
-import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
-import { promisify } from 'node:util'
 
+import { createCanvas } from '@napi-rs/canvas'
 import sharp from 'sharp'
 
 import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
 
-const execFileAsync = promisify(execFile)
+// Keep native ESM import: TypeScript's CommonJS output rewrites import() to require(),
+// which cannot load PDF.js's top-level await. The module path is a fixed constant.
+const loadPdfJs = new Function('return import("pdfjs-dist/legacy/build/pdf.mjs")') as () => Promise<typeof import('pdfjs-dist')>
+let pdfJs: ReturnType<typeof loadPdfJs> | undefined
+const assets = path.dirname(require.resolve('pdfjs-dist/package.json')).replace(/\\/g, '/') + '/'
 const cache = new Map<number, Promise<Buffer[]>>()
 const MAX_CACHED_DOCUMENTS = 5
 
 const renderDocument = async (documentId: number, pageCount: number): Promise<Buffer[]> => {
-  if (process.platform !== 'win32') throw new Error('Page thumbnails require Windows PDF rendering')
   const bytes = await repo.getDocumentPdf(documentId)
   if (!bytes) throw new Error('Source document not found')
-  const tempRoot = path.resolve(os.tmpdir())
-  const tempDir = await mkdtemp(path.join(tempRoot, 'merge-pdf-thumbs-'))
+  const { getDocument } = await (pdfJs ??= loadPdfJs())
+  const loadingTask = getDocument({
+    data: new Uint8Array(bytes),
+    cMapUrl: assets + 'cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: assets + 'standard_fonts/',
+    wasmUrl: assets + 'wasm/',
+  })
   try {
-    const inputPath = path.join(tempDir, 'source.pdf')
-    await writeFile(inputPath, bytes)
-    const script = await readFile(path.join(__dirname, 'RenderPdfThumbnails.ps1'), 'utf8')
-    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-      windowsHide: true,
-      timeout: 120_000,
-      maxBuffer: 1024 * 1024,
-      env: { ...process.env, MERGE_PDF_THUMB_INPUT: inputPath, MERGE_PDF_THUMB_OUTPUT: tempDir },
-    })
-    return Promise.all(Array.from({ length: pageCount }, (_, index) => readFile(path.join(tempDir, `page-${index + 1}.png`))))
-  } finally {
-    if (path.dirname(path.resolve(tempDir)) !== tempRoot || !path.basename(tempDir).startsWith('merge-pdf-thumbs-')) {
-      throw new Error('Unsafe thumbnail temporary directory')
+    const pdf = await loadingTask.promise
+    if (pdf.numPages !== pageCount || pageCount < 1 || pageCount > 500) throw new Error('Invalid PDF page count')
+    const images: Buffer[] = []
+    for (let index = 1; index <= pageCount; index++) {
+      const page = await pdf.getPage(index)
+      const original = page.getViewport({ scale: 1 })
+      const viewport = page.getViewport({ scale: 240 / original.width })
+      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height))
+      try {
+        await page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport }).promise
+        images.push(canvas.toBuffer('image/png'))
+      } finally {
+        page.cleanup()
+      }
     }
-    await rm(tempDir, { recursive: true, force: true })
+    return images
+  } finally {
+    await loadingTask.destroy()
   }
 }
 

@@ -55,11 +55,21 @@ export const checkOutputDirectory = async (directory = getOutputDirectory()): Pr
 
 const hash = (bytes: Buffer): Buffer => createHash('sha256').update(bytes).digest()
 
-export const publishPdf = async (directory: string, fileName: string, bytes: Buffer): Promise<string> => {
+export const publishPdf = async (directory: string, fileName: string, bytes: Buffer, overwrite = true): Promise<string> => {
   const finalPath = path.join(directory, fileName)
   const temporary = `${finalPath}.${randomUUID()}.tmp`
   let created = false
   try {
+    if (!overwrite) {
+      const existing = await readFile(finalPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (existing) {
+        if (hash(existing).equals(hash(bytes))) return finalPath
+        throw Object.assign(new Error('An unrelated file already exists at this path'), { code: 'EEXIST' })
+      }
+    }
     await writeFile(temporary, bytes, { flag: 'wx' })
     created = true
     await rename(temporary, finalPath)

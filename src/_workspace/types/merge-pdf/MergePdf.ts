@@ -17,8 +17,20 @@ export interface JobSummary {
   ROW_VERSION: number
   UPDATE_DATE: string
   UPDATE_BY: string
+  CREATE_BY?: string
+  CREATE_DATE?: string
   DOCUMENT_COUNT: number
   PAGE_COUNT: number
+  LAST_COMPLETED_AT?: string | null
+  OUTPUT_FILE_NAME?: string | null
+  NETWORK_PATH?: string | null
+  DOCUMENT_PAGE_COUNTS?: Record<string, number>
+  UNCLASSIFIED_PAGE_COUNT?: number
+}
+
+export interface DocumentStatusSummary {
+  DOCUMENT_PAGE_COUNTS: Record<string, number>
+  UNCLASSIFIED_PAGE_COUNT: number
 }
 
 export interface DocumentSummary {

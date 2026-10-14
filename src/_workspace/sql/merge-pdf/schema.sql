@@ -1,6 +1,11 @@
--- Merge PDF schema for the dedicated development database only.
--- MySQL 8.0.16+ is required for enforced CHECK constraints.
--- The application must set max_allowed_packet above its accepted upload size.
+-- Complete Merge PDF schema for a new, empty database.
+-- MySQL 8.0.16+; configure max_allowed_packet >= 64 MiB on the server.
+-- Change merge_pdf in CREATE DATABASE and USE if another name is required.
+-- This file creates all six tables and category seed data; no migrations are needed.
+
+CREATE DATABASE merge_pdf CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE merge_pdf;
+SET NAMES utf8mb4;
 
 CREATE TABLE MERGE_PDF_CATEGORY (
   CATEGORY_ID TINYINT UNSIGNED NOT NULL,
@@ -54,6 +59,18 @@ CREATE TABLE MERGE_PDF_JOB (
   CONSTRAINT CK_MERGE_PDF_JOB_STATUS CHECK (STATUS IN ('DRAFT', 'COMPLETING', 'COMPLETED')),
   CONSTRAINT CK_MERGE_PDF_JOB_VERSION CHECK (ROW_VERSION > 0),
   CONSTRAINT CK_MERGE_PDF_JOB_INUSE CHECK (INUSE IN (0, 1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE MERGE_PDF_FILE_SEQUENCE (
+  PREFIX CHAR(6) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  NEXT_VALUE INT UNSIGNED NOT NULL DEFAULT 1,
+  INUSE TINYINT(1) NOT NULL DEFAULT 1,
+  CREATE_BY VARCHAR(30) NOT NULL,
+  CREATE_DATE DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UPDATE_BY VARCHAR(30) NOT NULL,
+  UPDATE_DATE DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (PREFIX),
+  CONSTRAINT CK_MERGE_PDF_FILE_SEQUENCE_INUSE CHECK (INUSE IN (0, 1))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE MERGE_PDF_DOCUMENT (

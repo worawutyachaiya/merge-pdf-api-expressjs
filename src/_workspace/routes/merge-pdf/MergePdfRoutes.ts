@@ -4,17 +4,19 @@ import { z } from 'zod'
 
 import { MergePdfError, MergePdfService } from '@src/_workspace/services/merge-pdf/MergePdfService'
 import { getPageThumbnail } from '@src/_workspace/services/merge-pdf/PageThumbnail'
+import { AuditActorError, withAuditActor } from '@src/_workspace/services/merge-pdf/AuditActor'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 20 * 1024 * 1024 } })
 const id = z.coerce.number().int().positive().safe()
 const version = z.number().int().positive()
 const jobFields = z.object({
-  title: z.string().trim().min(1).max(255),
+  title: z.string().trim().max(255).default(''),
   reference: z.string().trim().max(100).nullable(),
 })
 const editFields = jobFields.extend({ rowVersion: version })
 const versionFields = z.object({ rowVersion: version })
+const completeFields = versionFields.extend({ fields: jobFields.optional() })
 const reorderFields = versionFields.extend({ pageIds: z.array(id).max(500) })
 const uploadFields = z.object({
   rowVersion: z.coerce.number().int().positive(),
@@ -45,16 +47,29 @@ const respond = (res: Response, result: unknown, method: string, status = 200, t
 }
 
 type Handler = (req: Request, res: Response) => Promise<void>
+const readOnlyMethods = new Set([
+  'List Merge PDF jobs',
+  'View Merge PDF job',
+  'Preview Merge PDF document',
+  'Preview Merge PDF page',
+  'Thumbnail Merge PDF page',
+  'Download merged PDF',
+  'Download source document',
+])
 const safe =
   (method: string, handler: Handler) =>
   async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
-      await handler(req, res)
+      if (readOnlyMethods.has(method)) await handler(req, res)
+      else await withAuditActor(req.body?.UPDATE_BY, () => handler(req, res))
     } catch (error: unknown) {
-      const status = error instanceof MergePdfError ? error.statusCode : error instanceof z.ZodError ? 400 : 500
+      const status = error instanceof MergePdfError || error instanceof AuditActorError ? error.statusCode : error instanceof z.ZodError ? 400 : 500
       res.status(status).json({
         Status: false,
-        Message: error instanceof MergePdfError || error instanceof z.ZodError ? error.message : 'Merge PDF operation failed',
+        Message:
+          error instanceof MergePdfError || error instanceof AuditActorError || error instanceof z.ZodError
+            ? error.message
+            : 'Merge PDF operation failed',
         ResultOnDb: [],
         MethodOnDb: method,
         TotalCountOnDb: 0,
@@ -65,7 +80,13 @@ const safe =
 const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
   upload.single('file')(req, res, (error) => {
     if (error) {
-      res.status(400).json({ Status: false, Message: 'File exceeds 20 MiB or upload is invalid', ResultOnDb: [], MethodOnDb: 'Upload Merge PDF document', TotalCountOnDb: 0 })
+      res.status(400).json({
+        Status: false,
+        Message: 'File exceeds 20 MiB or upload is invalid',
+        ResultOnDb: [],
+        MethodOnDb: 'Upload Merge PDF document',
+        TotalCountOnDb: 0,
+      })
       return
     }
     if (req.file) {
@@ -81,7 +102,13 @@ const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
 router.use((req, res, next) => {
   const remote = req.socket.remoteAddress
   if (process.env.NODE_ENV !== 'development' || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote ?? '')) {
-    res.status(403).json({ Status: false, Message: 'Merge PDF is available only on local development', ResultOnDb: [], MethodOnDb: 'Merge PDF access', TotalCountOnDb: 0 })
+    res.status(403).json({
+      Status: false,
+      Message: 'Merge PDF is available only on local development',
+      ResultOnDb: [],
+      MethodOnDb: 'Merge PDF access',
+      TotalCountOnDb: 0,
+    })
     return
   }
   next()
@@ -135,7 +162,11 @@ router.post(
   '/jobs/:jobId/save-draft',
   safe('Save Merge PDF draft', async (req, res) => {
     const fields = editFields.parse(req.body)
-    respond(res, await MergePdfService.saveDraft(id.parse(req.params.jobId), fields.rowVersion, fields.title, fields.reference), 'Save Merge PDF draft')
+    respond(
+      res,
+      await MergePdfService.saveDraft(id.parse(req.params.jobId), fields.rowVersion, fields.title, fields.reference),
+      'Save Merge PDF draft'
+    )
   })
 )
 
@@ -148,6 +179,26 @@ router.post(
 )
 
 router.post(
+  '/jobs/:jobId/delete',
+  safe('Delete Merge PDF job', async (req, res) => {
+    const fields = versionFields.parse(req.body)
+    respond(res, await MergePdfService.deleteJob(id.parse(req.params.jobId), fields.rowVersion), 'Delete Merge PDF job')
+  })
+)
+
+router.post(
+  '/jobs/:jobId/documents/:documentId/source',
+  safe('Download source document', async (req, res) => {
+    const file = await MergePdfService.originalDocument(id.parse(req.params.jobId), id.parse(req.params.documentId))
+    if (!file) throw new MergePdfError('Source document not found', 404)
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.ORIGINAL_FILE_NAME)}`)
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.send(file.ORIGINAL_BYTES)
+  })
+)
+
+router.post(
   '/jobs/:jobId/documents',
   receiveFile,
   safe('Upload Merge PDF document', async (req, res) => {
@@ -155,7 +206,14 @@ router.post(
     const fields = uploadFields.parse(req.body)
     respond(
       res,
-      await MergePdfService.addDocument(id.parse(req.params.jobId), fields.rowVersion, fields.categoryId, fields.entryStatusCode ?? null, req.file.originalname, req.file.buffer),
+      await MergePdfService.addDocument(
+        id.parse(req.params.jobId),
+        fields.rowVersion,
+        fields.categoryId,
+        fields.entryStatusCode ?? null,
+        req.file.originalname,
+        req.file.buffer
+      ),
       'Upload Merge PDF document',
       201
     )
@@ -181,7 +239,11 @@ router.post(
   '/jobs/:jobId/pages/:pageId/category',
   safe('Classify Merge PDF page', async (req, res) => {
     const fields = pageCategoryFields.parse(req.body)
-    respond(res, await MergePdfService.updatePageCategory(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion, fields.categoryId), 'Classify Merge PDF page')
+    respond(
+      res,
+      await MergePdfService.updatePageCategory(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion, fields.categoryId),
+      'Classify Merge PDF page'
+    )
   })
 )
 
@@ -189,7 +251,11 @@ router.post(
   '/jobs/:jobId/pages/:pageId/rotation',
   safe('Rotate Merge PDF page', async (req, res) => {
     const fields = pageRotationFields.parse(req.body)
-    respond(res, await MergePdfService.rotatePage(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion, fields.delta), 'Rotate Merge PDF page')
+    respond(
+      res,
+      await MergePdfService.rotatePage(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion, fields.delta),
+      'Rotate Merge PDF page'
+    )
   })
 )
 
@@ -197,7 +263,11 @@ router.post(
   '/jobs/:jobId/pages/:pageId/remove',
   safe('Remove Merge PDF page', async (req, res) => {
     const fields = versionFields.parse(req.body)
-    respond(res, await MergePdfService.removePage(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion), 'Remove Merge PDF page')
+    respond(
+      res,
+      await MergePdfService.removePage(id.parse(req.params.jobId), id.parse(req.params.pageId), fields.rowVersion),
+      'Remove Merge PDF page'
+    )
   })
 )
 
@@ -205,7 +275,11 @@ router.post(
   '/jobs/:jobId/documents/:documentId/remove',
   safe('Remove Merge PDF document', async (req, res) => {
     const fields = versionFields.parse(req.body)
-    respond(res, await MergePdfService.removeDocument(id.parse(req.params.jobId), id.parse(req.params.documentId), fields.rowVersion), 'Remove Merge PDF document')
+    respond(
+      res,
+      await MergePdfService.removeDocument(id.parse(req.params.jobId), id.parse(req.params.documentId), fields.rowVersion),
+      'Remove Merge PDF document'
+    )
   })
 )
 
@@ -232,8 +306,8 @@ router.post(
 router.post(
   '/jobs/:jobId/complete',
   safe('Complete Merge PDF job', async (req, res) => {
-    const fields = versionFields.parse(req.body)
-    respond(res, await MergePdfService.complete(id.parse(req.params.jobId), fields.rowVersion), 'Complete Merge PDF job')
+    const fields = completeFields.parse(req.body)
+    respond(res, await MergePdfService.complete(id.parse(req.params.jobId), fields.rowVersion, fields.fields), 'Complete Merge PDF job')
   })
 )
 
