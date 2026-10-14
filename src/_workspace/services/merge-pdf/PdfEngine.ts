@@ -4,6 +4,7 @@ import { PDFDocument, degrees } from 'pdf-lib'
 import sharp from 'sharp'
 
 import type { SourceType } from '@src/_workspace/types/merge-pdf/MergePdf'
+import { convertExcelToPdf } from './ExcelPdf'
 
 const MAX_PAGES = 500
 // The development database max_allowed_packet is 64 MiB. The repository writes
@@ -42,7 +43,7 @@ export const normalizeFile = async (fileName: string, bytes: Buffer): Promise<No
   if (source.type === 'PDF') {
     pdfBytes = bytes
   } else if (source.type === 'EXCEL') {
-    throw new Error('Excel conversion is unavailable until a company-approved converter is provided')
+    pdfBytes = await convertExcelToPdf(fileName, bytes)
   } else {
     const metadata = await sharp(bytes, { limitInputPixels: 60_000_000 }).metadata()
     if (!['jpeg', 'png', 'webp', 'tiff'].includes(metadata.format ?? '') || (metadata.pages ?? 1) !== 1) {
