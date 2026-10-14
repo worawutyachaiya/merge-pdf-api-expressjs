@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-const defaultShare = '\\\\192.168.14.35\\C12_PM-Support\\MergePDF_TEST'
-
-export const getOutputDirectory = (): string => process.env.MERGE_PDF_OUTPUT_DIR || process.env.MERGE_PDF_DEVELOPMENT_SHARE || defaultShare
+export const getOutputDirectory = (): string => {
+  const directory = process.env.MERGE_PDF_OUTPUT_DIR?.trim()
+  if (!directory) throw new Error('MERGE_PDF_OUTPUT_DIR is required')
+  return directory
+}
 
 export class PublicationStorageError extends Error {
   readonly code: string

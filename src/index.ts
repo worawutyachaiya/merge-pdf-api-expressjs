@@ -7,6 +7,7 @@ import { loadEnvironmentVariables } from './config/env'
 
 import { errorHandler } from './middlewares/errorHandler'
 import { notFoundHandler } from './middlewares/notFoundHandler'
+import { startEmailDigestJob } from './_workspace/jobs/emailDigestJob'
 
 // * Load environment variables
 loadEnvironmentVariables()
@@ -24,7 +25,7 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }))
 app.use(cors())
 
 // * Routes
-app.post('/', (req: Request, res: Response) => {
+app.get('/', (req: Request, res: Response) => {
   res.send(`
 🐱 Server is running
   - URL               : http://localhost:${PORT}${prefix}
@@ -34,7 +35,7 @@ app.post('/', (req: Request, res: Response) => {
   `)
 })
 
-app.post(prefix, (req: Request, res: Response) => {
+app.get(prefix, (req: Request, res: Response) => {
   res.send(`
 🐱 Server is running
   - URL               : http://localhost:${PORT}${prefix}
@@ -60,6 +61,6 @@ app.listen(PORT, () => {
   - Environment       : ${process.env.NODE_ENV}
   - Port              : ${PORT}
   - DB                : ${process.env.DB}
-  - Master Data DB    : ${process.env.MASTER_DATA_DB}
   `)
+  startEmailDigestJob()
 })

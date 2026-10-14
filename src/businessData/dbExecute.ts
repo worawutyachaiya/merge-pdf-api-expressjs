@@ -206,8 +206,8 @@ import type { PoolConnection, QueryResult } from 'mysql2/promise'
 
 export const MySQLExecute = {
   // Parameterized operations for binary content and new features. SQL and values are never logged.
-  queryParams: async <T extends QueryResult>(sql: string, values: readonly unknown[] = []): Promise<T> => {
-    const conn = await connection()
+  queryParams: async <T extends QueryResult>(sql: string, values: readonly unknown[] = [], configDb = ''): Promise<T> => {
+    const conn = await connection(configDb)
     try {
       const [rows] = await conn.query<T>(sql, [...values])
       return rows

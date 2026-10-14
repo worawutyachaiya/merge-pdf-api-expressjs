@@ -13,6 +13,7 @@ import { summarizeDocumentPages } from './DocumentStatus'
 import { removePublishedPdfs } from './PublicationDeletion'
 import { classifyCombinedPdf } from './CombinedPdfClassification'
 import { applyEditorChanges, type PreparedEditorChanges } from './EditorChanges'
+import { EmailDigestService } from '@src/_workspace/services/email-settings/EmailDigestService'
 
 export class MergePdfError extends Error {
   constructor(
@@ -125,6 +126,7 @@ export const MergePdfService = {
         const savedPath = await publishPdf(directory, fileName, pdf, !!previous)
         written = { directory, fileName, original }
         await repo.finishPublication(conn, jobId, publicationId, savedPath)
+        await EmailDigestService.enqueuePublishedPublication(conn, jobId, publicationId)
       })
     } catch (error) {
       if (written) {
@@ -240,6 +242,7 @@ export const MergePdfService = {
         assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
         restore = await removePublishedPdfs(await repo.getDeletionPublications(conn, jobId))
         await repo.softDeleteJob(conn, jobId)
+        await EmailDigestService.cancelJobQueue(conn, jobId)
       })
     } catch (error) {
       if (restore) await restore()
@@ -432,7 +435,10 @@ export const MergePdfService = {
       console.error('Merge PDF publication failed:', error)
       if (error instanceof Error) failureMessage = error.message
     }
-    await MySQLExecute.withTransaction((conn) => repo.finishPublication(conn, jobId, publication.publicationId, publishedPath))
+    await MySQLExecute.withTransaction(async conn => {
+      await repo.finishPublication(conn, jobId, publication.publicationId, publishedPath)
+      if (publishedPath) await EmailDigestService.enqueuePublishedPublication(conn, jobId, publication.publicationId)
+    })
     if (!publishedPath) throw new MergePdfError(failureMessage, 503)
     return detail(jobId)
   },
