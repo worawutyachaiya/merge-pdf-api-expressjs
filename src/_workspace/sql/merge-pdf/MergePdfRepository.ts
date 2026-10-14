@@ -473,8 +473,16 @@ export const MergePdfRepository = {
       `UPDATE MERGE_PDF_DOCUMENT SET ENTRY_STATUS_CODE = ?, ENTRY_STATUS_SOURCE = ?, UPDATE_BY = ?
        WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1
        AND EXISTS (SELECT 1 FROM MERGE_PDF_PAGE P WHERE P.DOCUMENT_ID = MERGE_PDF_DOCUMENT.DOCUMENT_ID
-         AND P.JOB_ID = ? AND P.INUSE = 1 AND P.CATEGORY_ID = 1)`,
+         AND P.JOB_ID = ? AND P.INUSE = 1 AND COALESCE(P.CATEGORY_ID, MERGE_PDF_DOCUMENT.CATEGORY_ID) = 1)`,
       [statusCode, statusCode ? 'USER' : null, getAuditEmployeeCode(), jobId, documentId, jobId]
+    )
+    return result.affectedRows
+  },
+
+  clearEntryStatus: async (conn: PoolConnection, jobId: number, documentId: number): Promise<number> => {
+    const [result] = await conn.query<ResultSetHeader>(
+      'UPDATE MERGE_PDF_DOCUMENT SET ENTRY_STATUS_CODE = NULL, ENTRY_STATUS_SOURCE = NULL, UPDATE_BY = ? WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1',
+      [getAuditEmployeeCode(), jobId, documentId]
     )
     return result.affectedRows
   },

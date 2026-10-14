@@ -113,6 +113,7 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
     }
     const hasEntry = changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 1)
     if (hasEntry) await repo.updateEntryStatus(conn, jobId, documentId, doc.ENTRY_STATUS_CODE)
+    else await repo.clearEntryStatus(conn, jobId, documentId)
   }
   await repo.reorderPages(conn, jobId, keep)
 }

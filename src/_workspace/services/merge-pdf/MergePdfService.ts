@@ -111,7 +111,17 @@ export const MergePdfService = {
           if (error.code === 'ENOENT') return null
           throw error
         })
-        const publicationId = await repo.insertPublication(conn, jobId, await repo.nextPublicationVersion(conn, jobId), fileName, pdf, sha256(pdf), pages.length, path.join(directory, fileName))
+        const publicationVersion = await repo.nextPublicationVersion(conn, jobId)
+        const publicationId = await repo.insertPublication(
+          conn,
+          jobId,
+          publicationVersion,
+          fileName,
+          pdf,
+          sha256(pdf),
+          pages.length,
+          path.join(directory, fileName)
+        )
         const savedPath = await publishPdf(directory, fileName, pdf, !!previous)
         written = { directory, fileName, original }
         await repo.finishPublication(conn, jobId, publicationId, savedPath)
