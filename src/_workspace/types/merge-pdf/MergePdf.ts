@@ -1,4 +1,5 @@
 export type SourceType = 'PDF' | 'IMAGE' | 'EXCEL'
+export type BatchPageAction = { kind: 'category'; categoryId: number } | { kind: 'rotate'; delta: 90 | 270 } | { kind: 'remove' }
 export type ClassificationSource = 'AUTO_TEXT' | 'AUTO_OCR' | 'FILENAME' | 'UNKNOWN' | 'USER'
 
 export interface PageClassification {

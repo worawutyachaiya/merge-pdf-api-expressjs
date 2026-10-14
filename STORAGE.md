@@ -15,9 +15,16 @@ to read, create, rename and delete files there. Restart the API after environmen
 
 New drafts automatically reserve IYY-MMNN names using Asia/Bangkok year/month and a locked
 monthly sequence. Names remain the same on edits, and deleted numbers are never reused.
+Add New previews the next number; allocation is confirmed under a database lock when creating
+the draft, so simultaneous users can receive different numbers from their previews.
 The sequence records the employee creator/updater and timestamps; INUSE=0 stops new reservations.
 Save & Complete writes the merged PDF; Save Changes replaces the same file at the same shared path.
 The list previews the current PDF, and Source documents downloads each original uploaded file.
+Combined PDF imports classify clear document headings from the text layer on each page.
+Scanned pages, conflicting headings and pages without a recognized heading remain unclassified
+for manual selection. No OCR is performed, and import-entry status 04 still requires confirmation.
+Selected pages can change type, rotate or be removed in one transaction with one row-version update.
+Invalid/stale selections are rejected before changes; deleting all pages of a source deactivates it.
 
 Deleting a Draft or Completed document sets INUSE=0 on its database rows with the employee
 performing the action, while physically deleting its recorded PDFs from the output folder.

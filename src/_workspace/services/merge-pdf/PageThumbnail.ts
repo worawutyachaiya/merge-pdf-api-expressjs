@@ -1,29 +1,20 @@
-import path from 'node:path'
-
 import { createCanvas } from '@napi-rs/canvas'
 import sharp from 'sharp'
 
 import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
+import { loadPdfJs } from './PdfJs'
 
-// Keep native ESM import: TypeScript's CommonJS output rewrites import() to require(),
-// which cannot load PDF.js's top-level await. The module path is a fixed constant.
-const loadPdfJs = new Function('return import("pdfjs-dist/legacy/build/pdf.mjs")') as () => Promise<typeof import('pdfjs-dist')>
-let pdfJs: ReturnType<typeof loadPdfJs> | undefined
-const assets = path.dirname(require.resolve('pdfjs-dist/package.json')).replace(/\\/g, '/') + '/'
 const cache = new Map<number, Promise<Buffer[]>>()
 const MAX_CACHED_DOCUMENTS = 5
 
 const renderDocument = async (documentId: number, pageCount: number): Promise<Buffer[]> => {
   const bytes = await repo.getDocumentPdf(documentId)
   if (!bytes) throw new Error('Source document not found')
-  const { getDocument } = await (pdfJs ??= loadPdfJs())
-  const loadingTask = getDocument({
-    data: new Uint8Array(bytes),
-    cMapUrl: assets + 'cmaps/',
-    cMapPacked: true,
-    standardFontDataUrl: assets + 'standard_fonts/',
-    wasmUrl: assets + 'wasm/',
-  })
+  return renderPdfThumbnails(bytes, pageCount)
+}
+
+export const renderPdfThumbnails = async (bytes: Buffer, pageCount: number): Promise<Buffer[]> => {
+  const loadingTask = await loadPdfJs(bytes)
   try {
     const pdf = await loadingTask.promise
     if (pdf.numPages !== pageCount || pageCount < 1 || pageCount > 500) throw new Error('Invalid PDF page count')
@@ -58,11 +49,14 @@ const cachedDocument = (documentId: number, pageCount: number): Promise<Buffer[]
   return pending
 }
 
-export const getPageThumbnail = async (jobId: number, pageId: number): Promise<Buffer | undefined> => {
+export const getPageThumbnail = async (jobId: number, pageId: number, rotation?: number): Promise<Buffer | undefined> => {
   const page = await repo.getPageThumbnailSource(jobId, pageId)
   if (!page) return undefined
   const images = await cachedDocument(page.DOCUMENT_ID, page.PDF_PAGE_COUNT)
   const image = images[page.SOURCE_PAGE_NUMBER - 1]
   if (!image) throw new Error('Thumbnail page missing')
-  return sharp(image).rotate(page.ROTATION_DEGREES).png().toBuffer()
+  return sharp(image)
+    .rotate(rotation ?? page.ROTATION_DEGREES)
+    .png()
+    .toBuffer()
 }

@@ -1,15 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { readFile, unlink } from 'node:fs/promises'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
 import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
-import type { JobDetail, JobSummary, PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
+import type { BatchPageAction, JobDetail, JobSummary, PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
 
 import { extractPage, mergePages, normalizeFile, type NormalizedFile } from './PdfEngine'
 import { checkOutputDirectory, getOutputDirectory, publishPdf } from './PublicationStorage'
 import { FileSequenceInactiveError, getImportPrefix, isImportCode } from './ImportFileName'
 import { summarizeDocumentPages } from './DocumentStatus'
 import { removePublishedPdfs } from './PublicationDeletion'
+import { classifyCombinedPdf } from './CombinedPdfClassification'
+import { applyEditorChanges, type PreparedEditorChanges } from './EditorChanges'
 
 export class MergePdfError extends Error {
   constructor(
@@ -83,6 +86,88 @@ const persistDocument = async (
 }
 
 export const MergePdfService = {
+  completeEditor: async (jobId: number, expectedVersion: number, changes: PreparedEditorChanges): Promise<JobDetail> => {
+    let written: { directory: string; fileName: string; original: Buffer | null } | undefined
+    try {
+      await MySQLExecute.withTransaction(async conn => {
+        const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+        await applyEditorChanges(conn, jobId, changes)
+        const pages = await repo.getPages(jobId, conn)
+        const documents = await repo.getDocuments(jobId, conn)
+        const required = await repo.getRequiredCategoryIds(conn)
+        if (!pages.length || required.some(id => !pages.some(page => page.CATEGORY_ID === id))) throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
+        const entryIds = new Set(pages.filter(page => page.CATEGORY_ID === 1).map(page => page.DOCUMENT_ID))
+        if (documents.some(doc => entryIds.has(doc.DOCUMENT_ID) && doc.ENTRY_STATUS_CODE !== '04')) throw new MergePdfError('Every import entry must have status 04', 400)
+        const previous = await repo.getLatestPublished(jobId, conn)
+        if (previous && !isImportCode(job.JOB_CODE)) throw new MergePdfError('This document uses a legacy filename. Contact your administrator.', 409)
+        const code = isImportCode(job.JOB_CODE) ? job.JOB_CODE : await repo.assignImportCode(conn, jobId, getImportPrefix())
+        const fileName = `${code}.pdf`
+        const directory = previous?.NETWORK_PATH ? path.dirname(previous.NETWORK_PATH) : getOutputDirectory()
+        await checkOutputDirectory(directory)
+        const blobs = await repo.getAllPdfBytes(conn, jobId)
+        const pdf = await mergePages(pages.map(page => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES })),
+          new Map(blobs.map(blob => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES])))
+        const original = await readFile(path.join(directory, fileName)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return null
+          throw error
+        })
+        const publicationId = await repo.insertPublication(conn, jobId, await repo.nextPublicationVersion(conn, jobId), fileName, pdf, sha256(pdf), pages.length, path.join(directory, fileName))
+        const savedPath = await publishPdf(directory, fileName, pdf, !!previous)
+        written = { directory, fileName, original }
+        await repo.finishPublication(conn, jobId, publicationId, savedPath)
+      })
+    } catch (error) {
+      if (written) {
+        if (written.original) await publishPdf(written.directory, written.fileName, written.original)
+        else await unlink(path.join(written.directory, written.fileName))
+      }
+      if (error instanceof MergePdfError) throw error
+      throw new MergePdfError(error instanceof Error ? error.message : 'Could not save changes', 503)
+    }
+    return detail(jobId)
+  },
+  saveEditorDraft: async (jobId: number, expectedVersion: number, changes: PreparedEditorChanges): Promise<JobDetail> => {
+    await MySQLExecute.withTransaction(async (conn) => {
+      const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      if (job.STATUS !== 'DRAFT' || job.LAST_COMPLETED_AT) throw new MergePdfError('Use Save Changes for completed documents', 409)
+      await applyEditorChanges(conn, jobId, changes)
+      await repo.bumpJob(conn, jobId)
+    })
+    return detail(jobId)
+  },
+  nextCode: async (): Promise<string> => {
+    const prefix = getImportPrefix()
+    const row = await repo.getNextImportNumber(prefix)
+    if (row && row.INUSE !== 1) throw new MergePdfError('Monthly file numbering is inactive. Contact your administrator.', 409)
+    return prefix + String(row?.NEXT_VALUE ?? 1).padStart(2, '0')
+  },
+  batchPages: async (jobId: number, expectedVersion: number, pageIds: number[], action: BatchPageAction): Promise<JobDetail> => {
+    if (!pageIds.length || pageIds.length > 500 || new Set(pageIds).size !== pageIds.length) throw new MergePdfError('Select distinct pages', 400)
+    await MySQLExecute.withTransaction(async (conn) => {
+      assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      const pages = await repo.getPages(jobId, conn)
+      if (pageIds.some((id) => !pages.some((page) => page.PAGE_ID === id))) throw new MergePdfError('Selected page not found. Reload and try again', 404)
+      const documents = new Set<number>()
+      for (const pageId of pageIds) {
+        if (action.kind === 'category') await repo.updatePageCategory(conn, jobId, pageId, action.categoryId)
+        else if (action.kind === 'rotate') await repo.rotatePage(conn, jobId, pageId, action.delta)
+        else {
+          const documentId = await repo.softDeletePage(conn, jobId, pageId)
+          if (documentId !== undefined) documents.add(documentId)
+        }
+      }
+      if (action.kind === 'remove') {
+        for (const documentId of documents) if ((await repo.countActiveDocumentPages(conn, documentId)) === 0) await repo.softDeleteDocument(conn, jobId, documentId)
+        await repo.reorderPages(
+          conn,
+          jobId,
+          pages.filter((page) => !pageIds.includes(page.PAGE_ID)).map((page) => page.PAGE_ID)
+        )
+      }
+      await repo.bumpJob(conn, jobId)
+    })
+    return detail(jobId)
+  },
   list: async (
     search: string,
     status: 'ALL' | 'DRAFT' | 'COMPLETED',
@@ -154,14 +239,7 @@ export const MergePdfService = {
     return { JOB_ID: jobId }
   },
 
-  addDocument: async (
-    jobId: number,
-    expectedVersion: number,
-    categoryId: number,
-    entryStatusCode: string | null,
-    fileName: string,
-    bytes: Buffer
-  ): Promise<JobDetail> => {
+  addDocument: async (jobId: number, expectedVersion: number, categoryId: number, entryStatusCode: string | null, fileName: string, bytes: Buffer): Promise<JobDetail> => {
     if (categoryId !== 1 && entryStatusCode) throw new MergePdfError('Status applies only to import entry', 400)
     if (fileName.length < 1 || fileName.length > 255) throw new MergePdfError('File name is too long', 400)
     let normalized: Awaited<ReturnType<typeof normalizeFile>>
@@ -185,11 +263,7 @@ export const MergePdfService = {
       const message = error instanceof Error ? error.message : 'Invalid document'
       throw new MergePdfError(message, message.startsWith('Excel conversion is unavailable') ? 503 : 400)
     }
-    const classifications: PageClassification[] = Array.from({ length: normalized.pageCount }, () => ({
-      categoryId: 10,
-      source: 'UNKNOWN',
-      confidence: null,
-    }))
+    const classifications = await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount)
     return persistDocument(jobId, expectedVersion, 10, null, fileName, bytes, normalized, classifications)
   },
 
@@ -323,10 +397,7 @@ export const MergePdfService = {
             new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
           )
           if (previous && !isImportCode(job.JOB_CODE)) {
-            throw new MergePdfError(
-              'This document uses a legacy filename. Contact your administrator before saving changes.',
-              409
-            )
+            throw new MergePdfError('This document uses a legacy filename. Contact your administrator before saving changes.', 409)
           }
           let code = job.JOB_CODE
           if (!isImportCode(code)) {
@@ -339,16 +410,7 @@ export const MergePdfService = {
           }
           const fileName = `${code}.pdf`
           if (fields) await repo.updateJob(conn, jobId, code, fields.reference)
-          const publicationId = await repo.insertPublication(
-            conn,
-            jobId,
-            version,
-            fileName,
-            pdf,
-            sha256(pdf),
-            pages.length,
-            path.join(outputDirectory, fileName)
-          )
+          const publicationId = await repo.insertPublication(conn, jobId, version, fileName, pdf, sha256(pdf), pages.length, path.join(outputDirectory, fileName))
           return { publicationId, pdf, fileName, directory: outputDirectory, overwrite: !!previous }
         })
 
@@ -367,9 +429,9 @@ export const MergePdfService = {
 
   documentPdf: (documentId: number): Promise<Buffer | undefined> => repo.getDocumentPdf(documentId),
   originalDocument: (jobId: number, documentId: number) => repo.getOriginalDocument(jobId, documentId),
-  pagePdf: async (jobId: number, pageId: number): Promise<Buffer | undefined> => {
+  pagePdf: async (jobId: number, pageId: number, rotation?: number): Promise<Buffer | undefined> => {
     const source = await repo.getPagePdfSource(jobId, pageId)
-    return source ? extractPage(source.NORMALIZED_PDF_BYTES, source.SOURCE_PAGE_NUMBER, source.ROTATION_DEGREES) : undefined
+    return source ? extractPage(source.NORMALIZED_PDF_BYTES, source.SOURCE_PAGE_NUMBER, rotation ?? source.ROTATION_DEGREES) : undefined
   },
   publicationPdf: (jobId: number, publicationId: number): Promise<{ bytes: Buffer; fileName: string } | undefined> =>
     repo.getPublicationPdf(jobId, publicationId).then((row) =>
