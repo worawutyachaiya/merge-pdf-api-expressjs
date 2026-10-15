@@ -35,7 +35,7 @@ const toFileUrl = (networkPath: string): string => {
   return `file:///${segments.map((segment, index) => (index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment))).join('/')}`
 }
 
-export const sendDigestEmail = async (items: DigestItemRow[], date: string): Promise<void> => {
+export const sendDigestEmail = async (recipientEmail: string, items: DigestItemRow[], date: string): Promise<void> => {
   const url = process.env.MERGE_PDF_MAIL_API_URL
   if (!url) throw new Error('MERGE_PDF_MAIL_API_URL is required')
   const submissionDate = formatSubmissionDate(date)
@@ -54,7 +54,7 @@ export const sendDigestEmail = async (items: DigestItemRow[], date: string): Pro
     )
     .join('')
   const form = new FormData()
-  form.set('To', 'worawut.yachaiya@furukawaelectric.com')
+  form.set('To', recipientEmail)
   form.set('CC', '')
   form.set('Subject', `[Merge PDF] เอกสารใบขนขาเข้า / Import PDFs - ${submissionDate}`)
   form.set(
