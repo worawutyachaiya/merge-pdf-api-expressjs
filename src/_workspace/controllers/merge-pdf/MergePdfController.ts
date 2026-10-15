@@ -4,6 +4,7 @@ import { MergePdfError, MergePdfService } from '@src/_workspace/services/merge-p
 import { getPageThumbnail, renderPdfThumbnails } from '@src/_workspace/services/merge-pdf/PageThumbnail'
 import { normalizeFile, extractPage } from '@src/_workspace/services/merge-pdf/PdfEngine'
 import { classifyCombinedPdf } from '@src/_workspace/services/merge-pdf/CombinedPdfClassification'
+import { detectDocumentType } from '@src/_workspace/services/merge-pdf/DocumentTypeDetection'
 import { editorChangesSchema, prepareEditorUploads } from '@src/_workspace/services/merge-pdf/EditorChanges'
 import { AuditActorError, withAuditActor } from '@src/_workspace/services/merge-pdf/AuditActor'
 import {
@@ -65,6 +66,14 @@ const safe =
   }
 
 export const MergePdfController = {
+  detectDocumentType: async (req: Request, res: Response) => {
+    if (!req.file) {
+      res.status(400).json({ Status: false, Message: 'Select a file', ResultOnDb: [] })
+      return
+    }
+    const name = typeof req.body.fileName === 'string' ? req.body.fileName : req.file.originalname
+    respond(res, await detectDocumentType(name, req.file.buffer), 'Detect document type')
+  },
   prepareFile: async (req: Request, res: Response) => {
     try {
       if (!req.file) throw new Error('Select a file')

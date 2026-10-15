@@ -29,6 +29,7 @@ const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
 }
 
 router.post('/editor/prepare', multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 20 * 1024 * 1024 } }).single('file'), MergePdfController.prepareFile)
+router.post('/editor/detect-document-type', receiveFile, MergePdfController.detectDocumentType)
 
 router.post(
   '/editor/page-preview',

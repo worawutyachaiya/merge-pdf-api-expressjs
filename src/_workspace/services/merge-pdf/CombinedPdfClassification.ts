@@ -17,13 +17,31 @@ const headings: { categoryId: number; pattern: RegExp }[] = [
   { categoryId: 9, pattern: /^DELIVERY NOTE$/ },
 ]
 
-export const classifyCombinedPdf = async (bytes: Buffer, pageCount: number): Promise<PageClassification[]> => {
-  const results = Array.from({ length: pageCount }, unknown)
-  const task = await loadPdfJs(bytes)
+export const classifyDocumentHeadings = (lines: readonly string[]): PageClassification => {
+  const matches = new Set<number>()
+  for (const line of lines) {
+    const text = line
+      .normalize('NFKC')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[-\u2013\u2014_]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toUpperCase()
+    for (const heading of headings) if (heading.pattern.test(text)) matches.add(heading.categoryId)
+  }
+  return matches.size === 1 ? { categoryId: [...matches][0], source: 'AUTO_TEXT', confidence: 0.95 } : unknown()
+}
+
+export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Promise<PageClassification[]> => {
+  const results = Array.from({ length: pageCount ?? 0 }, unknown)
+  let task: Awaited<ReturnType<typeof loadPdfJs>> | undefined
   try {
+    task = await loadPdfJs(bytes)
     const pdf = await task.promise
-    if (pdf.numPages !== pageCount) return results
-    for (let index = 0; index < pageCount; index++) {
+    if (pageCount !== undefined && pdf.numPages !== pageCount) return results
+    const count = pageCount ?? Math.min(pdf.numPages, 500)
+    if (pageCount === undefined) results.push(...Array.from({ length: count }, unknown))
+    for (let index = 0; index < count; index++) {
       const page = await pdf.getPage(index + 1)
       try {
         const viewport = page.getViewport({ scale: 1 })
@@ -35,17 +53,21 @@ export const classifyCombinedPdf = async (bytes: Buffer, pageCount: number): Pro
           const x = a * item.transform[4] + c * item.transform[5] + e
           const y = b * item.transform[4] + d * item.transform[5] + f
           if (y < 0 || y > viewport.height * 0.35) continue
-          let line = lines.find(candidate => Math.abs(candidate.y - y) < 3)
-          if (!line) { line = { y, items: [] }; lines.push(line) }
+          let line = lines.find((candidate) => Math.abs(candidate.y - y) < 3)
+          if (!line) {
+            line = { y, items: [] }
+            lines.push(line)
+          }
           line.items.push({ x, text: item.str })
         }
-        const matches = new Set<number>()
-        for (const line of lines) {
-          const text = line.items.sort((left, right) => left.x - right.x).map(item => item.text).join(' ')
-            .normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase()
-          for (const heading of headings) if (heading.pattern.test(text)) matches.add(heading.categoryId)
-        }
-        if (matches.size === 1) results[index] = { categoryId: [...matches][0], source: 'AUTO_TEXT', confidence: 0.95 }
+        results[index] = classifyDocumentHeadings(
+          lines.map((line) =>
+            line.items
+              .sort((left, right) => left.x - right.x)
+              .map((item) => item.text)
+              .join(' ')
+          )
+        )
       } catch {
         // Text extraction failure leaves this page available for manual classification.
         results[index] = unknown()
@@ -56,7 +78,7 @@ export const classifyCombinedPdf = async (bytes: Buffer, pageCount: number): Pro
   } catch {
     return results
   } finally {
-    await task.destroy()
+    await task?.destroy()
   }
   return results
 }

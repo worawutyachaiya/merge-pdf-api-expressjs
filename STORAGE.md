@@ -24,6 +24,12 @@ The list previews the current PDF, and Source documents downloads each original 
 Combined PDF imports classify clear document headings from the text layer on each page.
 Scanned pages, conflicting headings and pages without a recognized heading remain unclassified
 for manual selection. No OCR is performed, and import-entry status 04 still requires confirmation.
+The Choose document type dropzone suggests a category per file using its filename first. If the
+filename is unclear, it reads PDF text headings (up to the existing 500-page limit) or Excel headings
+(first 40 rows of up to 10 sheets). Mixed/ambiguous types, scans without text and unreadable content
+default to Other. Users can override suggestions, including while detection is running; late results
+never overwrite their choice or restore removed files. Detection uses POST `/merge-pdf/editor/detect-document-type`
+and does not save files or database rows. Import waits until queued detection finishes.
 Selected pages can change type, rotate or be removed in one transaction with one row-version update.
 Invalid/stale selections are rejected before changes; deleting all pages of a source deactivates it.
 
