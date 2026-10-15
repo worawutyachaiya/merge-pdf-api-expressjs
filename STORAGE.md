@@ -37,8 +37,10 @@ existing client-profile pattern. Login and menu/action permissions follow the ex
 
 Email settings let administrators select active employees from the `ACCOUNTING` department in
 `person.MEMBER_FED` and choose the daily digest time (default 17:00 Asia/Bangkok). After a PDF is
-published successfully, the API queues it and sends one daily summary per selected employee with
-the document code, PDF name, completion time and Server Share path. Failed recipients are retried;
+published successfully, the API queues it and sends a summary at the configured time with
+the document code, PDF name, completion time and Server Share path. Changing the delivery time allows
+another batch on the same day, containing only eligible PDFs that have not already been assigned or sent.
+Each date/time pair is processed once; earlier batches remain in the delivery history. Failed recipients are retried;
 already delivered recipient emails are not resent during normal retries. Configure the person directory
 connection explicitly with `PERSON_HOST`, `PERSON_USER_NAME`, `PERSON_PASSWORD`, `PERSON_DB`, and
 `PERSON_PORT` in each environment file. Person lookups use this connection only; no values fall back to
@@ -64,7 +66,7 @@ The six email tables are:
 | MERGE_PDF_EMAIL_SETTING | Daily send time and time zone; one setting row. |
 | MERGE_PDF_EMAIL_RECIPIENT | Selected Accounting employee codes; deselection sets INUSE to 0. |
 | MERGE_PDF_EMAIL_QUEUE | Published PDF versions waiting for notification; edited/deleted jobs deactivate obsolete queue rows. |
-| MERGE_PDF_EMAIL_DIGEST | One daily batch with status, attempt count and completion time. |
+| MERGE_PDF_EMAIL_DIGEST | One batch per date and configured send time, with status, attempt count and completion time. |
 | MERGE_PDF_EMAIL_DIGEST_ITEM | Publications included in each daily batch. |
 | MERGE_PDF_EMAIL_DIGEST_RECIPIENT | Recipient name/email snapshot and delivery status per batch, so retries skip delivered recipients. |
 

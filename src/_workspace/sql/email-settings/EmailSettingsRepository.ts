@@ -78,8 +78,11 @@ export const EmailSettingsRepository = {
     return Number(rows[0]?.ACQUIRED ?? 0) === 1
   },
   releaseLock: (conn: PoolConnection, lockName: string) => conn.query('SELECT RELEASE_LOCK(?)', [lockName]),
-  existingDigest: async (conn: PoolConnection, date: string) => {
-    const [rows] = await conn.query<DigestRow[]>('SELECT DIGEST_ID, STATUS FROM MERGE_PDF_EMAIL_DIGEST WHERE DIGEST_DATE = ? FOR UPDATE', [date])
+  existingDigest: async (conn: PoolConnection, date: string, scheduleTime: string) => {
+    const [rows] = await conn.query<DigestRow[]>(
+      'SELECT DIGEST_ID, STATUS FROM MERGE_PDF_EMAIL_DIGEST WHERE DIGEST_DATE = ? AND SCHEDULE_TIME = ? FOR UPDATE',
+      [date, `${scheduleTime}:00`]
+    )
     return rows[0]
   },
   queuedItemCount: async (conn: PoolConnection) => {

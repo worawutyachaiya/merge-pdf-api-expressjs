@@ -23,7 +23,7 @@ const bangkokClock = (timeZone: string): { date: string; time: string } => {
 const createDailyDigest = async (conn: PoolConnection, date: string, scheduleTime: string): Promise<void> => {
   await conn.beginTransaction()
   try {
-    const existing = await repo.existingDigest(conn, date)
+    const existing = await repo.existingDigest(conn, date, scheduleTime)
     if (existing && existing.STATUS !== 'NO_RECIPIENTS') {
       await conn.commit()
       return
