@@ -4,7 +4,6 @@ import { z } from 'zod'
 
 import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
 import { normalizeFile } from './PdfEngine'
-import { getAuditEmployeeCode } from './AuditActor'
 
 const identifier = z
   .number()
@@ -94,13 +93,19 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
     if (!pageId || (page.PAGE_ID > 0 && pageId !== page.PAGE_ID) || (page.PAGE_ID < 0 && page.DOCUMENT_ID > 0) || keep.includes(pageId)) throw new Error('Invalid editor page')
     keep.push(pageId)
     const original = allPages.find((item) => item.PAGE_ID === pageId)!
-    if (original.CATEGORY_ID !== page.CATEGORY_ID || original.CLASSIFICATION_SOURCE !== page.CLASSIFICATION_SOURCE) {
-      await repo.updatePageCategory(conn, jobId, pageId, page.CATEGORY_ID)
+    if (
+      original.CATEGORY_ID !== page.CATEGORY_ID ||
+      original.CLASSIFICATION_SOURCE !== page.CLASSIFICATION_SOURCE ||
+      original.CLASSIFICATION_CONFIDENCE !== page.CLASSIFICATION_CONFIDENCE ||
+      original.ROTATION_DEGREES !== page.ROTATION_DEGREES
+    ) {
+      await repo.updatePageDetails(conn, jobId, pageId, {
+        CATEGORY_ID: page.CATEGORY_ID,
+        CLASSIFICATION_SOURCE: page.CLASSIFICATION_SOURCE,
+        CLASSIFICATION_CONFIDENCE: page.CLASSIFICATION_CONFIDENCE,
+        ROTATION_DEGREES: page.ROTATION_DEGREES,
+      })
     }
-    await conn.query(
-      'UPDATE MERGE_PDF_PAGE SET CATEGORY_ID = ?, CLASSIFICATION_SOURCE = ?, CLASSIFICATION_CONFIDENCE = ?, ROTATION_DEGREES = ?, UPDATE_BY = ? WHERE PAGE_ID = ? AND JOB_ID = ?',
-      [page.CATEGORY_ID, page.CLASSIFICATION_SOURCE, page.CLASSIFICATION_CONFIDENCE, page.ROTATION_DEGREES, getAuditEmployeeCode(), pageId, jobId]
-    )
   }
   for (const page of allPages) if (!keep.includes(page.PAGE_ID)) await repo.softDeletePage(conn, jobId, page.PAGE_ID)
   for (const doc of existingDocuments)

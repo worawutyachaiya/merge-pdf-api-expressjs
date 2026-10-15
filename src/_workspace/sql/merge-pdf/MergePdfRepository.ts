@@ -3,6 +3,7 @@ import { FileSequenceInactiveError } from '@src/_workspace/services/merge-pdf/Im
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
+import { replaceActiveRecords, revisionSql } from './RecordRevision'
 import type { DocumentStatusSummary, DocumentSummary, JobSummary, PageClassification, PageSummary, PublicationSummary } from '@src/_workspace/types/merge-pdf/MergePdf'
 
 interface JobRow extends RowDataPacket, JobSummary {}
@@ -70,7 +71,9 @@ const jobSelect = `
 
 export const MergePdfRepository = {
   getNextImportNumber: async (prefix: string) => {
-    const [row] = await MySQLExecute.queryParams<FileSequenceRow[]>('SELECT NEXT_VALUE, INUSE FROM MERGE_PDF_FILE_SEQUENCE WHERE PREFIX = ?', [prefix])
+    const [row] = await MySQLExecute.queryParams<FileSequenceRow[]>('SELECT NEXT_VALUE, INUSE FROM MERGE_PDF_FILE_SEQUENCE WHERE PREFIX = ? ORDER BY REVISION_NO DESC LIMIT 1', [
+      prefix,
+    ])
     return row
   },
   getDocumentStatuses: async (jobIds: readonly number[]): Promise<Map<number, DocumentStatusSummary>> => {
@@ -249,16 +252,20 @@ export const MergePdfRepository = {
 
   assignImportCode: async (conn: PoolConnection, jobId: number, prefix: string): Promise<string> => {
     const employeeCode = getAuditEmployeeCode()
-    await conn.query(
-      `INSERT INTO MERGE_PDF_FILE_SEQUENCE (PREFIX, NEXT_VALUE, INUSE, CREATE_BY, UPDATE_BY)
-       VALUES (?, 1, 1, ?, ?) ON DUPLICATE KEY UPDATE PREFIX = PREFIX`,
-      [prefix, employeeCode, employeeCode]
-    )
-    const [rows] = await conn.query<FileSequenceRow[]>('SELECT NEXT_VALUE, INUSE FROM MERGE_PDF_FILE_SEQUENCE WHERE PREFIX = ? FOR UPDATE', [prefix])
+    // A duplicate leaves the first revision unchanged and takes an exclusive allocation lock.
+    // INSERT IGNORE would take shared locks and deadlock concurrent allocations.
+    await conn.query('INSERT INTO MERGE_PDF_FILE_SEQUENCE (PREFIX, NEXT_VALUE, CREATE_BY, UPDATE_BY) VALUES (?, 1, ?, ?) ON DUPLICATE KEY UPDATE PREFIX = PREFIX', [
+      prefix,
+      employeeCode,
+      employeeCode,
+    ])
+    const [rows] = await conn.query<FileSequenceRow[]>('SELECT NEXT_VALUE, INUSE FROM MERGE_PDF_FILE_SEQUENCE WHERE PREFIX = ? ORDER BY REVISION_NO DESC LIMIT 1 FOR UPDATE', [
+      prefix,
+    ])
     if (rows[0].INUSE !== 1) throw new FileSequenceInactiveError(`Monthly file sequence ${prefix} is inactive. Contact your administrator.`)
     const code = `${prefix}${String(rows[0].NEXT_VALUE).padStart(2, '0')}`
-    await conn.query('UPDATE MERGE_PDF_FILE_SEQUENCE SET NEXT_VALUE = NEXT_VALUE + 1, UPDATE_BY = ? WHERE PREFIX = ? AND INUSE = 1', [employeeCode, prefix])
-    await conn.query('UPDATE MERGE_PDF_JOB SET JOB_CODE = ?, JOB_TITLE = ?, UPDATE_BY = ? WHERE JOB_ID = ?', [code, code, employeeCode, jobId])
+    await replaceActiveRecords(conn, 'MERGE_PDF_FILE_SEQUENCE', 'PREFIX = ?', [prefix], { NEXT_VALUE: revisionSql('NEXT_VALUE + 1') }, employeeCode)
+    await replaceActiveRecords(conn, 'MERGE_PDF_JOB', 'JOB_ID = ?', [jobId], { JOB_CODE: code, JOB_TITLE: code }, employeeCode)
     return code
   },
 
@@ -272,18 +279,24 @@ export const MergePdfRepository = {
   },
 
   updateJob: async (conn: PoolConnection, jobId: number, title: string, reference: string | null): Promise<void> => {
-    await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_JOB SET JOB_TITLE = ?, JOB_REFERENCE = ?,
-       ROW_VERSION = ROW_VERSION + 1, UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1`,
-      [title, reference, getAuditEmployeeCode(), jobId]
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_JOB',
+      'JOB_ID = ?',
+      [jobId],
+      { JOB_TITLE: title, JOB_REFERENCE: reference, ROW_VERSION: revisionSql('ROW_VERSION + 1') },
+      getAuditEmployeeCode()
     )
   },
 
   bumpJob: async (conn: PoolConnection, jobId: number): Promise<void> => {
-    await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_JOB SET STATUS = CASE WHEN LAST_COMPLETED_AT IS NOT NULL THEN 'COMPLETED' ELSE STATUS END, ROW_VERSION = ROW_VERSION + 1,
-       UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1`,
-      [getAuditEmployeeCode(), jobId]
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_JOB',
+      'JOB_ID = ?',
+      [jobId],
+      { STATUS: revisionSql("CASE WHEN LAST_COMPLETED_AT IS NOT NULL THEN 'COMPLETED' ELSE STATUS END"), ROW_VERSION: revisionSql('ROW_VERSION + 1') },
+      getAuditEmployeeCode()
     )
   },
 
@@ -291,12 +304,12 @@ export const MergePdfRepository = {
 
   softDeleteJob: async (conn: PoolConnection, jobId: number, draftOnly = false): Promise<void> => {
     const [result] = await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_JOB SET INUSE = 0, ROW_VERSION = ROW_VERSION + 1, UPDATE_BY = ?
+      `UPDATE MERGE_PDF_JOB SET INUSE = 0, UPDATE_BY = ?
        WHERE JOB_ID = ? AND INUSE = 1 AND STATUS <> 'COMPLETING' AND (? = 0 OR STATUS = 'DRAFT')`,
       [getAuditEmployeeCode(), jobId, draftOnly ? 1 : 0]
     )
     if (result.affectedRows !== 1) throw new Error('Active document not found')
-    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1', [getAuditEmployeeCode(), jobId])
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1', [getAuditEmployeeCode(), jobId])
     await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1', [getAuditEmployeeCode(), jobId])
     await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PUBLICATION SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1', [getAuditEmployeeCode(), jobId])
   },
@@ -345,8 +358,11 @@ export const MergePdfRepository = {
     )
     // mysql2's prepared binary serializer fails on larger PDF Buffers. Each BASE64
     // update stays below the development server's 64 MiB packet limit.
-    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET ORIGINAL_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ?', [input.original.toString('base64'), result.insertId])
-    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET NORMALIZED_PDF_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ?', [
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET ORIGINAL_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ? AND REVISION_NO = 1 AND INUSE = 1', [
+      input.original.toString('base64'),
+      result.insertId,
+    ])
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_DOCUMENT SET NORMALIZED_PDF_BYTES = FROM_BASE64(?) WHERE DOCUMENT_ID = ? AND REVISION_NO = 1 AND INUSE = 1', [
       input.normalized.toString('base64'),
       result.insertId,
     ])
@@ -395,22 +411,34 @@ export const MergePdfRepository = {
   },
 
   updatePageCategory: async (conn: PoolConnection, jobId: number, pageId: number, categoryId: number): Promise<number> => {
-    const [result] = await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_PAGE SET CATEGORY_ID = ?, CLASSIFICATION_SOURCE = 'USER',
-       CLASSIFICATION_CONFIDENCE = NULL, UPDATE_BY = ?
-       WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1`,
-      [categoryId, getAuditEmployeeCode(), jobId, pageId]
+    return replaceActiveRecords(
+      conn,
+      'MERGE_PDF_PAGE',
+      'JOB_ID = ? AND PAGE_ID = ?',
+      [jobId, pageId],
+      { CATEGORY_ID: categoryId, CLASSIFICATION_SOURCE: 'USER', CLASSIFICATION_CONFIDENCE: null },
+      getAuditEmployeeCode()
     )
-    return result.affectedRows
+  },
+
+  updatePageDetails: async (
+    conn: PoolConnection,
+    jobId: number,
+    pageId: number,
+    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number }
+  ): Promise<void> => {
+    await replaceActiveRecords(conn, 'MERGE_PDF_PAGE', 'JOB_ID = ? AND PAGE_ID = ?', [jobId, pageId], changes, getAuditEmployeeCode())
   },
 
   rotatePage: async (conn: PoolConnection, jobId: number, pageId: number, delta: 90 | 270): Promise<number> => {
-    const [result] = await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_PAGE SET ROTATION_DEGREES = MOD(ROTATION_DEGREES + ?, 360), UPDATE_BY = ?
-       WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1`,
-      [delta, getAuditEmployeeCode(), jobId, pageId]
+    return replaceActiveRecords(
+      conn,
+      'MERGE_PDF_PAGE',
+      'JOB_ID = ? AND PAGE_ID = ?',
+      [jobId, pageId],
+      { ROTATION_DEGREES: revisionSql('MOD(ROTATION_DEGREES + ?, 360)', delta) },
+      getAuditEmployeeCode()
     )
-    return result.affectedRows
   },
 
   softDeletePage: async (conn: PoolConnection, jobId: number, pageId: number): Promise<number | undefined> => {
@@ -419,11 +447,7 @@ export const MergePdfRepository = {
       [jobId, pageId]
     )
     if (!rows[0]) return undefined
-    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = ? WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1', [
-      getAuditEmployeeCode(),
-      jobId,
-      pageId,
-    ])
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1', [getAuditEmployeeCode(), jobId, pageId])
     return rows[0].DOCUMENT_ID
   },
 
@@ -433,23 +457,18 @@ export const MergePdfRepository = {
   },
 
   reorderPages: async (conn: PoolConnection, jobId: number, ids: readonly number[]): Promise<void> => {
-    const start = await MergePdfRepository.nextPageOrder(conn, jobId)
-    for (let index = 0; index < ids.length; index += 1) {
-      await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET SORT_ORDER = ?, UPDATE_BY = ? WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1', [
-        start + index,
-        getAuditEmployeeCode(),
-        jobId,
-        ids[index],
-      ])
-    }
-    for (let index = 0; index < ids.length; index += 1) {
-      await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET SORT_ORDER = ?, UPDATE_BY = ? WHERE JOB_ID = ? AND PAGE_ID = ? AND INUSE = 1', [
-        index + 1,
-        getAuditEmployeeCode(),
-        jobId,
-        ids[index],
-      ])
-    }
+    if (!ids.length) return
+    const order = `CASE PAGE_ID ${ids.map(() => 'WHEN ? THEN ?').join(' ')} END`
+    const orderParams = ids.flatMap((id, index) => [id, index + 1])
+    // Retire the whole reordered group before inserting, so swaps never require temporary positions.
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_PAGE',
+      `JOB_ID = ? AND PAGE_ID IN (${ids.map(() => '?').join(', ')})`,
+      [jobId, ...ids],
+      { SORT_ORDER: revisionSql(order, ...orderParams) },
+      getAuditEmployeeCode()
+    )
   },
 
   softDeleteDocument: async (conn: PoolConnection, jobId: number, documentId: number): Promise<number> => {
@@ -459,7 +478,7 @@ export const MergePdfRepository = {
       documentId,
     ])
     if (result.affectedRows === 1) {
-      await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, SORT_ORDER = NULL, UPDATE_BY = ? WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1', [
+      await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PAGE SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1', [
         getAuditEmployeeCode(),
         jobId,
         documentId,
@@ -469,22 +488,27 @@ export const MergePdfRepository = {
   },
 
   updateEntryStatus: async (conn: PoolConnection, jobId: number, documentId: number, statusCode: string | null): Promise<number> => {
-    const [result] = await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_DOCUMENT SET ENTRY_STATUS_CODE = ?, ENTRY_STATUS_SOURCE = ?, UPDATE_BY = ?
-       WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1
-       AND EXISTS (SELECT 1 FROM MERGE_PDF_PAGE P WHERE P.DOCUMENT_ID = MERGE_PDF_DOCUMENT.DOCUMENT_ID
-         AND P.JOB_ID = ? AND P.INUSE = 1 AND COALESCE(P.CATEGORY_ID, MERGE_PDF_DOCUMENT.CATEGORY_ID) = 1)`,
-      [statusCode, statusCode ? 'USER' : null, getAuditEmployeeCode(), jobId, documentId, jobId]
+    return replaceActiveRecords(
+      conn,
+      'MERGE_PDF_DOCUMENT',
+      `JOB_ID = ? AND DOCUMENT_ID = ?
+      AND EXISTS (SELECT 1 FROM MERGE_PDF_PAGE P WHERE P.DOCUMENT_ID = MERGE_PDF_DOCUMENT.DOCUMENT_ID
+        AND P.JOB_ID = ? AND P.INUSE = 1 AND COALESCE(P.CATEGORY_ID, MERGE_PDF_DOCUMENT.CATEGORY_ID) = 1)`,
+      [jobId, documentId, jobId],
+      { ENTRY_STATUS_CODE: statusCode, ENTRY_STATUS_SOURCE: statusCode ? 'USER' : null },
+      getAuditEmployeeCode()
     )
-    return result.affectedRows
   },
 
   clearEntryStatus: async (conn: PoolConnection, jobId: number, documentId: number): Promise<number> => {
-    const [result] = await conn.query<ResultSetHeader>(
-      'UPDATE MERGE_PDF_DOCUMENT SET ENTRY_STATUS_CODE = NULL, ENTRY_STATUS_SOURCE = NULL, UPDATE_BY = ? WHERE JOB_ID = ? AND DOCUMENT_ID = ? AND INUSE = 1',
-      [getAuditEmployeeCode(), jobId, documentId]
+    return replaceActiveRecords(
+      conn,
+      'MERGE_PDF_DOCUMENT',
+      'JOB_ID = ? AND DOCUMENT_ID = ?',
+      [jobId, documentId],
+      { ENTRY_STATUS_CODE: null, ENTRY_STATUS_SOURCE: null },
+      getAuditEmployeeCode()
     )
-    return result.affectedRows
   },
 
   getAllPdfBytes: async (conn: PoolConnection, jobId: number): Promise<BlobRow[]> => {
@@ -518,31 +542,46 @@ export const MergePdfRepository = {
        VALUES (?, ?, ?, ?, ?, X'', ?, ?, ?, ?)`,
       [jobId, version, fileName, bytes.length, hash, pageCount, targetPath, getAuditEmployeeCode(), getAuditEmployeeCode()]
     )
-    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PUBLICATION SET OUTPUT_PDF_BYTES = FROM_BASE64(?) WHERE PUBLICATION_ID = ?', [bytes.toString('base64'), result.insertId])
-    await conn.query<ResultSetHeader>("UPDATE MERGE_PDF_JOB SET STATUS = 'COMPLETING', UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1", [getAuditEmployeeCode(), jobId])
+    await conn.query<ResultSetHeader>('UPDATE MERGE_PDF_PUBLICATION SET OUTPUT_PDF_BYTES = FROM_BASE64(?) WHERE PUBLICATION_ID = ? AND REVISION_NO = 1 AND INUSE = 1', [
+      bytes.toString('base64'),
+      result.insertId,
+    ])
+    await replaceActiveRecords(conn, 'MERGE_PDF_JOB', 'JOB_ID = ?', [jobId], { STATUS: 'COMPLETING' }, getAuditEmployeeCode())
     return result.insertId
   },
 
   finishPublication: async (conn: PoolConnection, jobId: number, publicationId: number, networkPath: string | null): Promise<void> => {
-    await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_PUBLICATION SET STATUS = ?, NETWORK_PATH = ?, PUBLISHED_AT = ?, FAILURE_CODE = ?, UPDATE_BY = ?
-       WHERE JOB_ID = ? AND PUBLICATION_ID = ? AND INUSE = 1`,
-      [
-        networkPath ? 'PUBLISHED' : 'FAILED',
-        networkPath,
-        networkPath ? new Date() : null,
-        networkPath ? null : 'NETWORK_WRITE_FAILED',
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_PUBLICATION',
+      'JOB_ID = ? AND PUBLICATION_ID = ?',
+      [jobId, publicationId],
+      {
+        STATUS: networkPath ? 'PUBLISHED' : 'FAILED',
+        NETWORK_PATH: networkPath,
+        PUBLISHED_AT: networkPath ? new Date() : null,
+        FAILURE_CODE: networkPath ? null : 'NETWORK_WRITE_FAILED',
+      },
+      getAuditEmployeeCode()
+    )
+    if (networkPath) {
+      await conn.query('UPDATE MERGE_PDF_PUBLICATION SET INUSE = 0, UPDATE_BY = ? WHERE JOB_ID = ? AND PUBLICATION_ID <> ? AND INUSE = 1', [
         getAuditEmployeeCode(),
         jobId,
         publicationId,
-      ]
-    )
-    await conn.query<ResultSetHeader>(
-      `UPDATE MERGE_PDF_JOB SET STATUS = CASE WHEN ? IS NOT NULL OR LAST_COMPLETED_AT IS NOT NULL THEN 'COMPLETED' ELSE 'DRAFT' END,
-       ROW_VERSION = ROW_VERSION + 1,
-       LAST_COMPLETED_AT = CASE WHEN ? IS NULL THEN LAST_COMPLETED_AT ELSE CURRENT_TIMESTAMP(3) END,
-       UPDATE_BY = ? WHERE JOB_ID = ? AND INUSE = 1`,
-      [networkPath, networkPath, getAuditEmployeeCode(), jobId]
+      ])
+    }
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_JOB',
+      'JOB_ID = ?',
+      [jobId],
+      {
+        STATUS: revisionSql("CASE WHEN ? IS NOT NULL OR LAST_COMPLETED_AT IS NOT NULL THEN 'COMPLETED' ELSE 'DRAFT' END", networkPath),
+        ROW_VERSION: revisionSql('ROW_VERSION + 1'),
+        LAST_COMPLETED_AT: revisionSql('CASE WHEN ? IS NULL THEN LAST_COMPLETED_AT ELSE CURRENT_TIMESTAMP(3) END', networkPath),
+      },
+      getAuditEmployeeCode()
     )
   },
 }

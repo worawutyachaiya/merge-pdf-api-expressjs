@@ -1,5 +1,6 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { MySQLExecute } from '@src/businessData/dbExecute'
+import { replaceActiveRecords, revisionSql } from '@src/_workspace/sql/merge-pdf/RecordRevision'
 import type { AccountingPerson, SettingRow, RecipientRow, DigestRow, DigestItemRow, DigestRecipientRow } from '@src/_workspace/types/email-settings/EmailSettings'
 
 const eligibleQueue = `FROM MERGE_PDF_EMAIL_QUEUE Q
@@ -39,18 +40,14 @@ export const EmailSettingsRepository = {
   },
   saveSettings: async (scheduleTime: string, codes: string[], actor: string) => {
     await MySQLExecute.withTransaction(async (conn) => {
-      await conn.execute(
-        `INSERT INTO MERGE_PDF_EMAIL_SETTING (SETTING_ID, SCHEDULE_TIME, TIME_ZONE, CREATE_BY, UPDATE_BY)
-         VALUES (1, ?, 'Asia/Bangkok', ?, ?)
-         ON DUPLICATE KEY UPDATE SCHEDULE_TIME = VALUES(SCHEDULE_TIME), TIME_ZONE = 'Asia/Bangkok', INUSE = 1, UPDATE_BY = VALUES(UPDATE_BY)`,
-        [`${scheduleTime}:00`, actor, actor]
-      )
+      const changed = await replaceActiveRecords(conn, 'MERGE_PDF_EMAIL_SETTING', 'SETTING_ID = 1', [], { SCHEDULE_TIME: `${scheduleTime}:00`, TIME_ZONE: 'Asia/Bangkok' }, actor)
+      if (!changed) throw new Error('Active email settings not found')
       await conn.execute('UPDATE MERGE_PDF_EMAIL_RECIPIENT SET INUSE = 0, UPDATE_BY = ? WHERE INUSE = 1', [actor])
       for (const code of codes) {
         await conn.execute(
-          `INSERT INTO MERGE_PDF_EMAIL_RECIPIENT (EMPLOYEE_CODE, INUSE, CREATE_BY, UPDATE_BY) VALUES (?, 1, ?, ?)
-           ON DUPLICATE KEY UPDATE INUSE = 1, UPDATE_BY = VALUES(UPDATE_BY)`,
-          [code, actor, actor]
+          `INSERT INTO MERGE_PDF_EMAIL_RECIPIENT (EMPLOYEE_CODE, REVISION_NO, CREATE_BY, UPDATE_BY)
+           SELECT ?, COALESCE(MAX(REVISION_NO), 0) + 1, ?, ? FROM MERGE_PDF_EMAIL_RECIPIENT WHERE EMPLOYEE_CODE = ?`,
+          [code, actor, actor, code]
         )
       }
     })
@@ -66,7 +63,7 @@ export const EmailSettingsRepository = {
       `INSERT INTO MERGE_PDF_EMAIL_QUEUE (JOB_ID, PUBLICATION_ID, CREATE_BY, UPDATE_BY)
        SELECT ?, PUBLICATION_ID, ?, ? FROM MERGE_PDF_PUBLICATION
        WHERE PUBLICATION_ID = ? AND JOB_ID = ? AND STATUS = 'PUBLISHED' AND INUSE = 1 AND NETWORK_PATH IS NOT NULL
-       ON DUPLICATE KEY UPDATE INUSE = 1, UPDATE_BY = VALUES(UPDATE_BY)`,
+         AND NOT EXISTS (SELECT 1 FROM MERGE_PDF_EMAIL_QUEUE Q WHERE Q.PUBLICATION_ID = MERGE_PDF_PUBLICATION.PUBLICATION_ID)`,
       [jobId, actor, actor, publicationId, jobId]
     )
   },
@@ -79,10 +76,10 @@ export const EmailSettingsRepository = {
   },
   releaseLock: (conn: PoolConnection, lockName: string) => conn.query('SELECT RELEASE_LOCK(?)', [lockName]),
   existingDigest: async (conn: PoolConnection, date: string, scheduleTime: string) => {
-    const [rows] = await conn.query<DigestRow[]>(
-      'SELECT DIGEST_ID, STATUS FROM MERGE_PDF_EMAIL_DIGEST WHERE DIGEST_DATE = ? AND SCHEDULE_TIME = ? FOR UPDATE',
-      [date, `${scheduleTime}:00`]
-    )
+    const [rows] = await conn.query<DigestRow[]>('SELECT DIGEST_ID, STATUS FROM MERGE_PDF_EMAIL_DIGEST WHERE DIGEST_DATE = ? AND SCHEDULE_TIME = ? AND INUSE = 1 FOR UPDATE', [
+      date,
+      `${scheduleTime}:00`,
+    ])
     return rows[0]
   },
   queuedItemCount: async (conn: PoolConnection) => {
@@ -110,7 +107,7 @@ export const EmailSettingsRepository = {
         [digestId, person.employeeCode, person.name, person.email]
       )
     }
-    await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST SET STATUS = 'PENDING', UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?", [digestId])
+    await replaceActiveRecords(conn, 'MERGE_PDF_EMAIL_DIGEST', 'DIGEST_ID = ?', [digestId], { STATUS: 'PENDING' }, 'SYSTEM')
   },
   pendingDigests: async (conn: PoolConnection, date: string) => {
     const [rows] = await conn.query<DigestRow[]>(
@@ -140,25 +137,45 @@ export const EmailSettingsRepository = {
     return rows
   },
   recordRecipientAttempt: async (conn: PoolConnection, digestId: number, employeeCode: string, error: string | null) => {
-    await conn.execute(
-      `UPDATE MERGE_PDF_EMAIL_DIGEST_RECIPIENT SET STATUS = IF(? IS NULL, 'SENT', 'PENDING'), ATTEMPT_COUNT = ATTEMPT_COUNT + 1,
-       LAST_ERROR = ?, SENT_DATE = IF(? IS NULL, CURRENT_TIMESTAMP(3), NULL), UPDATE_BY = 'SYSTEM'
-       WHERE DIGEST_ID = ? AND EMPLOYEE_CODE = ? AND STATUS = 'PENDING' AND INUSE = 1`,
-      [error, error, error, digestId, employeeCode]
-    )
+    await conn.beginTransaction()
+    try {
+      await replaceActiveRecords(
+        conn,
+        'MERGE_PDF_EMAIL_DIGEST_RECIPIENT',
+        "DIGEST_ID = ? AND EMPLOYEE_CODE = ? AND STATUS = 'PENDING'",
+        [digestId, employeeCode],
+        {
+          STATUS: error === null ? 'SENT' : 'PENDING',
+          ATTEMPT_COUNT: revisionSql('ATTEMPT_COUNT + 1'),
+          LAST_ERROR: error,
+          SENT_DATE: error === null ? revisionSql('CURRENT_TIMESTAMP(3)') : null,
+        },
+        'SYSTEM'
+      )
+      await conn.commit()
+    } catch (failure) {
+      await conn.rollback()
+      throw failure
+    }
   },
   recordDigestAttempt: async (conn: PoolConnection, digestId: number, errors: number) => {
-    await conn.execute(
-      `UPDATE MERGE_PDF_EMAIL_DIGEST SET ATTEMPT_COUNT = ATTEMPT_COUNT + 1,
-       LAST_ERROR = IF(? = 0, NULL, 'One or more recipient emails failed'), UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?`,
-      [errors, digestId]
-    )
-    await conn.execute(
-      `UPDATE MERGE_PDF_EMAIL_QUEUE Q JOIN MERGE_PDF_EMAIL_DIGEST_ITEM I ON I.QUEUE_ID = Q.QUEUE_ID
-       SET Q.ATTEMPT_COUNT = Q.ATTEMPT_COUNT + 1, Q.LAST_ERROR = IF(? = 0, NULL, 'One or more recipient emails failed'), Q.UPDATE_BY = 'SYSTEM'
-       WHERE I.DIGEST_ID = ? AND Q.INUSE = 1`,
-      [errors, digestId]
-    )
+    await conn.beginTransaction()
+    try {
+      const changes = { ATTEMPT_COUNT: revisionSql('ATTEMPT_COUNT + 1'), LAST_ERROR: errors === 0 ? null : 'One or more recipient emails failed' }
+      await replaceActiveRecords(conn, 'MERGE_PDF_EMAIL_DIGEST', 'DIGEST_ID = ?', [digestId], changes, 'SYSTEM')
+      await replaceActiveRecords(
+        conn,
+        'MERGE_PDF_EMAIL_QUEUE',
+        'QUEUE_ID IN (SELECT QUEUE_ID FROM MERGE_PDF_EMAIL_DIGEST_ITEM WHERE DIGEST_ID = ? AND INUSE = 1)',
+        [digestId],
+        changes,
+        'SYSTEM'
+      )
+      await conn.commit()
+    } catch (error) {
+      await conn.rollback()
+      throw error
+    }
   },
   finalizeDigest: async (conn: PoolConnection, digestId: number) => {
     const [rows] = await conn.query<RowDataPacket[]>(
@@ -169,13 +186,15 @@ export const EmailSettingsRepository = {
     if (Number(rows[0]?.TOTAL ?? 0) === 0 || Number(rows[0]?.PENDING ?? 0) !== 0) return
     await conn.beginTransaction()
     try {
-      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST SET STATUS = 'SENT', SENT_DATE = CURRENT_TIMESTAMP(3), LAST_ERROR = NULL, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?", [
-        digestId,
-      ])
-      await conn.execute(
-        `UPDATE MERGE_PDF_EMAIL_QUEUE Q JOIN MERGE_PDF_EMAIL_DIGEST_ITEM I ON I.QUEUE_ID = Q.QUEUE_ID
-         SET Q.STATUS = 'SENT', Q.SENT_DATE = CURRENT_TIMESTAMP(3), Q.UPDATE_BY = 'SYSTEM' WHERE I.DIGEST_ID = ? AND Q.INUSE = 1`,
-        [digestId]
+      const changes = { STATUS: 'SENT', SENT_DATE: revisionSql('CURRENT_TIMESTAMP(3)'), LAST_ERROR: null }
+      await replaceActiveRecords(conn, 'MERGE_PDF_EMAIL_DIGEST', 'DIGEST_ID = ?', [digestId], changes, 'SYSTEM')
+      await replaceActiveRecords(
+        conn,
+        'MERGE_PDF_EMAIL_QUEUE',
+        'QUEUE_ID IN (SELECT QUEUE_ID FROM MERGE_PDF_EMAIL_DIGEST_ITEM WHERE DIGEST_ID = ? AND INUSE = 1)',
+        [digestId],
+        changes,
+        'SYSTEM'
       )
       await conn.commit()
     } catch (error) {
@@ -186,9 +205,9 @@ export const EmailSettingsRepository = {
   cancelEmptyDigest: async (conn: PoolConnection, digestId: number) => {
     await conn.beginTransaction()
     try {
-      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?", [digestId])
-      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST_ITEM SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?", [digestId])
-      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST_RECIPIENT SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ?", [digestId])
+      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ? AND INUSE = 1", [digestId])
+      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST_ITEM SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ? AND INUSE = 1", [digestId])
+      await conn.execute("UPDATE MERGE_PDF_EMAIL_DIGEST_RECIPIENT SET INUSE = 0, UPDATE_BY = 'SYSTEM' WHERE DIGEST_ID = ? AND INUSE = 1", [digestId])
       await conn.commit()
     } catch (error) {
       await conn.rollback()

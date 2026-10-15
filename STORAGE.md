@@ -35,6 +35,23 @@ failed database transactions restore files removed in that attempt.
 CREATE_BY and UPDATE_BY come from the logged-in profile's EMPLOYEE_CODE, following the project's
 existing client-profile pattern. Login and menu/action permissions follow the existing frontend Security Center flow, as in masterdata.
 
+Saved edits preserve row history in the same tables. Each entity has a stable identifier and a
+`REVISION_NO`; together they form the physical primary key. Editing retires the current row with
+`INUSE = 0` and inserts a new revision with `INUSE = 1` in the same transaction. Retirement changes
+only INUSE and its audit fields, preserving old values, page positions and PDF bytes. The new row's
+CREATE_BY/UPDATE_BY identify the employee saving that revision (SYSTEM for scheduled work).
+This covers document metadata, status 04, page type/rotation/order, Draft/Completed saves, monthly
+number allocation, email settings/recipient selections and delivery status/attempts. Deletes retire
+rows without inserting replacements. Frontend edits remain local until Save.
+
+`ACTIVE_ROW` is generated as 1 for current rows and NULL for history. Unique indexes using it allow
+multiple retired revisions while enforcing one current row and preventing duplicate active file
+codes, page positions and scheduled batches. Foreign keys retain stable entity identifiers through
+MySQL 8.0's support for nonunique referenced indexes. Normal queries filter INUSE = 1 on every
+versioned join; history is available by identifier ordered by REVISION_NO. A successful PDF save
+retires previous publications, keeping their bytes in the database; the Share keeps the latest file
+under the existing filename. Earlier overwrites made before this change cannot be reconstructed.
+
 Email settings let administrators select active employees from the `ACCOUNTING` department in
 `person.MEMBER_FED` and choose the daily digest time (default 17:00 Asia/Bangkok). After a PDF is
 published successfully, the API queues it and sends a summary at the configured time with
@@ -47,8 +64,9 @@ connection explicitly with `PERSON_HOST`, `PERSON_USER_NAME`, `PERSON_PASSWORD`,
 the main database connection. Missing/invalid configuration produces an error and the recipients dropdown
 does not show previous query results after a failed refresh. The API reads env at startup using the same loader and dev commands as masterdata. Restart the API
 after changing env so that its connection pools use the new values. Set `MERGE_PDF_MAIL_API_URL` to the mail relay endpoint. The database
-schema should be applied from the current `schema.sql`; existing jobs and already-created tables are
-preserved while missing email tables and the default setting are added.
+schema for a new database is defined completely in `schema.sql`. CREATE TABLE IF NOT EXISTS does
+not modify an existing table definition; the existing configured database must also have the revision
+columns and indexes before this API version starts. Existing data is retained as revision 1.
 
 The localhost/development-only middleware has been removed. Environment mode does not block API routes.
 Email Settings is a separate menu (Security Center ID 730), with its page at
@@ -63,7 +81,7 @@ The six email tables are:
 
 | Table | Purpose |
 | --- | --- |
-| MERGE_PDF_EMAIL_SETTING | Daily send time and time zone; one setting row. |
+| MERGE_PDF_EMAIL_SETTING | Daily send time and time zone; one current setting plus previous revisions. |
 | MERGE_PDF_EMAIL_RECIPIENT | Selected Accounting employee codes; deselection sets INUSE to 0. |
 | MERGE_PDF_EMAIL_QUEUE | Published PDF versions waiting for notification; edited/deleted jobs deactivate obsolete queue rows. |
 | MERGE_PDF_EMAIL_DIGEST | One batch per date and configured send time, with status, attempt count and completion time. |
