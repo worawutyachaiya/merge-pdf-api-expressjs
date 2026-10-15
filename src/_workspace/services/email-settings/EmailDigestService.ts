@@ -52,7 +52,7 @@ const processPendingDigest = async (conn: PoolConnection, digest: DigestRow): Pr
   for (const recipient of recipients) {
     let failure: string | null = null
     try {
-      await sendDigestEmail(recipient.RECIPIENT_EMAIL, items, digest.DIGEST_DATE)
+      await sendDigestEmail(recipient, items, digest.DIGEST_DATE)
     } catch (error) {
       errors++
       failure = error instanceof Error ? error.message.slice(0, 1000) : 'Mail delivery failed'

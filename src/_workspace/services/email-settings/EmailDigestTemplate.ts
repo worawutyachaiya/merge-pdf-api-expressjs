@@ -1,4 +1,4 @@
-import type { DigestItemRow } from '@src/_workspace/types/email-settings/EmailSettings'
+import type { DigestRecipientRow, DigestItemRow } from '@src/_workspace/types/email-settings/EmailSettings'
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character)
@@ -35,7 +35,7 @@ const toFileUrl = (networkPath: string): string => {
   return `file:///${segments.map((segment, index) => (index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment))).join('/')}`
 }
 
-export const sendDigestEmail = async (recipientEmail: string, items: DigestItemRow[], date: string): Promise<void> => {
+export const sendDigestEmail = async (recipient: DigestRecipientRow, items: DigestItemRow[], date: string): Promise<void> => {
   const url = process.env.MERGE_PDF_MAIL_API_URL
   if (!url) throw new Error('MERGE_PDF_MAIL_API_URL is required')
   const submissionDate = formatSubmissionDate(date)
@@ -54,7 +54,7 @@ export const sendDigestEmail = async (recipientEmail: string, items: DigestItemR
     )
     .join('')
   const form = new FormData()
-  form.set('To', recipientEmail)
+  form.set('To', recipient.RECIPIENT_EMAIL)
   form.set('CC', '')
   form.set('Subject', `[Merge PDF] เอกสารใบขนขาเข้า / Import PDFs - ${submissionDate}`)
   form.set(
