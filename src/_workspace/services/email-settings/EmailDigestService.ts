@@ -1,7 +1,7 @@
 import type { PoolConnection } from 'mysql2/promise'
 import { connection } from '@src/businessData/db'
 import { getAuditEmployeeCode } from '@src/_workspace/services/merge-pdf/AuditActor'
-import { EmailSettingsRepository as repo } from '@src/_workspace/sql/email-settings/EmailSettingsRepository'
+import { EmailSettingsDataService as repo } from '@src/_workspace/services/email-settings/EmailSettingsDataService'
 import type { DigestRow } from '@src/_workspace/types/email-settings/EmailSettings'
 import { EmailSettingsService } from './EmailSettingsService'
 import { sendDigestEmail } from './EmailDigestTemplate'

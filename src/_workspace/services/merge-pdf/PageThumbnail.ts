@@ -1,7 +1,7 @@
 import { createCanvas } from '@napi-rs/canvas'
 import sharp from 'sharp'
 
-import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
+import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
 import { loadPdfJs } from './PdfJs'
 
 const cache = new Map<number, Promise<Buffer[]>>()

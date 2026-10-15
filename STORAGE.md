@@ -88,6 +88,14 @@ under `/merge-pdf`, with file handling and business logic in its controller/serv
 from `_workspace/jobs/emailDigestJob.ts` after the API starts, following the masterdata job pattern. The previous page URL redirects to the new URL.
 The Save action uses the menu's `IS_UPDATE` permission through the existing project helper.
 
+Query construction follows masterdata's service/SQL split. `sql/merge-pdf/MergePdfSQL.ts` and
+`sql/email-settings/EmailSettingsSQL.ts` build SQL without accessing connections or services.
+Their corresponding `MergePdfDataService` and `EmailSettingsDataService` execute statements,
+bind values and map results; application services handle the document and email flows.
+`RecordRevisionSQL` builds revision queries, while `RecordRevisionService` executes retirement
+and replacement on the caller's transaction connection. Queries retain bound parameters,
+row locks and the same transaction boundaries for document history and email delivery.
+
 The six email tables are:
 
 | Table | Purpose |

@@ -1,5 +1,5 @@
 import { getAuditEmployeeCode } from '@src/_workspace/services/merge-pdf/AuditActor'
-import { EmailSettingsRepository as repo } from '@src/_workspace/sql/email-settings/EmailSettingsRepository'
+import { EmailSettingsDataService as repo } from '@src/_workspace/services/email-settings/EmailSettingsDataService'
 import type { AccountingPerson, EmailSettings } from '@src/_workspace/types/email-settings/EmailSettings'
 
 export class EmailSettingsInputError extends Error {}

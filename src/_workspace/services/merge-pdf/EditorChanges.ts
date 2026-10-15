@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { PoolConnection } from 'mysql2/promise'
 import { z } from 'zod'
 
-import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
+import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
 import { normalizeFile } from './PdfEngine'
 
 const identifier = z

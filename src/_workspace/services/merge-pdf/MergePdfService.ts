@@ -3,7 +3,7 @@ import path from 'node:path'
 import { readFile, unlink } from 'node:fs/promises'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
-import { MergePdfRepository as repo } from '@src/_workspace/sql/merge-pdf/MergePdfRepository'
+import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
 import type { BatchPageAction, JobDetail, JobSummary, PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
 
 import { extractPage, mergePages, normalizeFile, type NormalizedFile } from './PdfEngine'
@@ -90,15 +90,16 @@ export const MergePdfService = {
   completeEditor: async (jobId: number, expectedVersion: number, changes: PreparedEditorChanges): Promise<JobDetail> => {
     let written: { directory: string; fileName: string; original: Buffer | null } | undefined
     try {
-      await MySQLExecute.withTransaction(async conn => {
+      await MySQLExecute.withTransaction(async (conn) => {
         const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
         await applyEditorChanges(conn, jobId, changes)
         const pages = await repo.getPages(jobId, conn)
         const documents = await repo.getDocuments(jobId, conn)
         const required = await repo.getRequiredCategoryIds(conn)
-        if (!pages.length || required.some(id => !pages.some(page => page.CATEGORY_ID === id))) throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
-        const entryIds = new Set(pages.filter(page => page.CATEGORY_ID === 1).map(page => page.DOCUMENT_ID))
-        if (documents.some(doc => entryIds.has(doc.DOCUMENT_ID) && doc.ENTRY_STATUS_CODE !== '04')) throw new MergePdfError('Every import entry must have status 04', 400)
+        if (!pages.length || required.some((id) => !pages.some((page) => page.CATEGORY_ID === id)))
+          throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
+        const entryIds = new Set(pages.filter((page) => page.CATEGORY_ID === 1).map((page) => page.DOCUMENT_ID))
+        if (documents.some((doc) => entryIds.has(doc.DOCUMENT_ID) && doc.ENTRY_STATUS_CODE !== '04')) throw new MergePdfError('Every import entry must have status 04', 400)
         const previous = await repo.getLatestPublished(jobId, conn)
         if (previous && !isImportCode(job.JOB_CODE)) throw new MergePdfError('This document uses a legacy filename. Contact your administrator.', 409)
         const code = isImportCode(job.JOB_CODE) ? job.JOB_CODE : await repo.assignImportCode(conn, jobId, getImportPrefix())
@@ -106,23 +107,16 @@ export const MergePdfService = {
         const directory = previous?.NETWORK_PATH ? path.dirname(previous.NETWORK_PATH) : getOutputDirectory()
         await checkOutputDirectory(directory)
         const blobs = await repo.getAllPdfBytes(conn, jobId)
-        const pdf = await mergePages(pages.map(page => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES })),
-          new Map(blobs.map(blob => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES])))
+        const pdf = await mergePages(
+          pages.map((page) => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES })),
+          new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
+        )
         const original = await readFile(path.join(directory, fileName)).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
           throw error
         })
         const publicationVersion = await repo.allocateNextPublicationVersion(conn, jobId)
-        const publicationId = await repo.insertPublication(
-          conn,
-          jobId,
-          publicationVersion,
-          fileName,
-          pdf,
-          sha256(pdf),
-          pages.length,
-          path.join(directory, fileName)
-        )
+        const publicationId = await repo.insertPublication(conn, jobId, publicationVersion, fileName, pdf, sha256(pdf), pages.length, path.join(directory, fileName))
         const savedPath = await publishPdf(directory, fileName, pdf, !!previous)
         written = { directory, fileName, original }
         await repo.finishPublication(conn, jobId, publicationId, savedPath)
@@ -435,7 +429,7 @@ export const MergePdfService = {
       console.error('Merge PDF publication failed:', error)
       if (error instanceof Error) failureMessage = error.message
     }
-    await MySQLExecute.withTransaction(async conn => {
+    await MySQLExecute.withTransaction(async (conn) => {
       await repo.finishPublication(conn, jobId, publication.publicationId, publishedPath)
       if (publishedPath) await EmailDigestService.enqueuePublishedPublication(conn, jobId, publication.publicationId)
     })
