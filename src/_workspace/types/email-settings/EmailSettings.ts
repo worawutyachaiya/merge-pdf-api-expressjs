@@ -7,11 +7,13 @@ export interface AccountingPerson {
 }
 
 export interface EmailSettings {
+  revisionNo: number
   scheduleTime: string
   recipients: AccountingPerson[]
 }
 
 export interface SettingRow extends RowDataPacket {
+  REVISION_NO: number
   SCHEDULE_TIME: string
   TIME_ZONE: string
 }

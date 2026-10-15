@@ -37,18 +37,23 @@ existing client-profile pattern. Login and menu/action permissions follow the ex
 
 Saved edits preserve row history in the same tables. Each entity has a stable identifier and a
 `REVISION_NO`; together they form the physical primary key. Editing retires the current row with
-`INUSE = 0` and inserts a new revision with `INUSE = 1` in the same transaction. Retirement changes
-only INUSE and its audit fields, preserving old values, page positions and PDF bytes. The new row's
+`INUSE = 0, IS_CURRENT = 0` and inserts a new revision with `INUSE = 1, IS_CURRENT = 1` in the same transaction. Retirement changes
+only these flags and audit fields, preserving old values, page positions and PDF bytes. The new row's
 CREATE_BY/UPDATE_BY identify the employee saving that revision (SYSTEM for scheduled work).
 This covers document metadata, status 04, page type/rotation/order, Draft/Completed saves, monthly
 number allocation, email settings/recipient selections and delivery status/attempts. Deletes retire
 rows without inserting replacements. Frontend edits remain local until Save.
 
-`ACTIVE_ROW` is generated as 1 for current rows and NULL for history. Unique indexes using it allow
-multiple retired revisions while enforcing one current row and preventing duplicate active file
-codes, page positions and scheduled batches. Foreign keys retain stable entity identifiers through
+`IS_CURRENT` is a regular 1/0 column following masterdata, and current queries require both
+`IS_CURRENT = 1` and `INUSE = 1`. Functional unique indexes use
+`IF(IS_CURRENT = 1 AND INUSE = 1, 1, NULL)` to allow multiple history rows with IS_CURRENT = 0
+while enforcing one current row and preventing duplicate current file codes, page positions and
+scheduled batches. Foreign keys retain stable entity identifiers through
 MySQL 8.0's support for nonunique referenced indexes. Normal queries filter INUSE = 1 on every
-versioned join; history is available by identifier ordered by REVISION_NO. A successful PDF save
+versioned join; history is available by identifier ordered by REVISION_NO. Saved document revisions
+appear in Search result, View and Preview modals, and the editor header. Preview shows PDF version
+separately from the document row revision. Email Settings displays its saved setting revision.
+A successful PDF save
 retires previous publications, keeping their bytes in the database; the Share keeps the latest file
 under the existing filename. Earlier overwrites made before this change cannot be reconstructed.
 

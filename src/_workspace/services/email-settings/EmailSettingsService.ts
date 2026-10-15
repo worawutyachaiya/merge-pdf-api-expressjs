@@ -40,7 +40,7 @@ export const EmailSettingsService = {
     ).map((row) => String(row.EMPLOYEE_CODE))
     // Validate the directory connection even if no recipients have been selected yet.
     const people = await EmailSettingsService.searchAccountingPeople('', codes.length ? codes : undefined)
-    return { scheduleTime: settings[0]?.SCHEDULE_TIME ?? '17:00', recipients: codes.length ? people : [] }
+    return { revisionNo: settings[0]?.REVISION_NO ?? 1, scheduleTime: settings[0]?.SCHEDULE_TIME ?? '17:00', recipients: codes.length ? people : [] }
   },
   saveSettings: async (scheduleTime: string, employeeCodes: string[]): Promise<void> => {
     const actor = getAuditEmployeeCode()

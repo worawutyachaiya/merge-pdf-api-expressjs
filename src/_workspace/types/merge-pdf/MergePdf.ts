@@ -16,6 +16,7 @@ export interface JobSummary {
   JOB_REFERENCE: string | null
   STATUS: 'DRAFT' | 'COMPLETING' | 'COMPLETED'
   ROW_VERSION: number
+  REVISION_NO: number
   UPDATE_DATE: string
   UPDATE_BY: string
   CREATE_BY?: string

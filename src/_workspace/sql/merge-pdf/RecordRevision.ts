@@ -27,7 +27,7 @@ export const revisionSql = (sql: string, ...params: unknown[]) => ({ sql, params
 type RevisionTable = keyof typeof records
 
 // Call within the same transaction and entity lock as the enclosing operation.
-// Only INUSE and retirement audit fields change on the old row; all business values are copied.
+// Only current/in-use flags and retirement audit fields change; business values are copied.
 export const replaceActiveRecords = async (
   conn: PoolConnection,
   table: RevisionTable,
@@ -39,12 +39,12 @@ export const replaceActiveRecords = async (
   const [keys, fields] = records[table].map((value) => value.split(' ').filter(Boolean))
   const columns = [...keys, ...fields]
   for (const field of Object.keys(changes)) if (!fields.includes(field)) throw new Error(`Cannot revise ${table}.${field}`)
-  const [rows] = await conn.query<RowDataPacket[]>(`SELECT ${keys.join(', ')}, REVISION_NO FROM ${table} WHERE INUSE = 1 AND (${where}) FOR UPDATE`, [...params])
+  const [rows] = await conn.query<RowDataPacket[]>(`SELECT ${keys.join(', ')}, REVISION_NO FROM ${table} WHERE INUSE = 1 AND IS_CURRENT = 1 AND (${where}) FOR UPDATE`, [...params])
   if (!rows.length) return 0
   const identity = rows.map(() => `(${[...keys, 'REVISION_NO'].map(() => '?').join(', ')})`).join(', ')
   const identityParams = rows.flatMap((row) => [...keys.map((key) => row[key]), row.REVISION_NO])
   const predicate = `(${[...keys, 'REVISION_NO'].join(', ')}) IN (${identity})`
-  await conn.query(`UPDATE ${table} SET INUSE = 0, UPDATE_BY = ? WHERE INUSE = 1 AND ${predicate}`, [actor, ...identityParams])
+  await conn.query(`UPDATE ${table} SET INUSE = 0, IS_CURRENT = 0, UPDATE_BY = ? WHERE INUSE = 1 AND IS_CURRENT = 1 AND ${predicate}`, [actor, ...identityParams])
   const values: unknown[] = []
   const expressions = columns.map((column) => {
     if (!Object.hasOwn(changes, column)) return column
@@ -58,8 +58,8 @@ export const replaceActiveRecords = async (
     return '?'
   })
   await conn.query(
-    `INSERT INTO ${table} (${columns.join(', ')}, REVISION_NO, INUSE, CREATE_BY, UPDATE_BY)
-     SELECT ${expressions.join(', ')}, REVISION_NO + 1, 1, ?, ? FROM ${table} WHERE ${predicate}`,
+    `INSERT INTO ${table} (${columns.join(', ')}, REVISION_NO, IS_CURRENT, INUSE, CREATE_BY, UPDATE_BY)
+     SELECT ${expressions.join(', ')}, REVISION_NO + 1, 1, 1, ?, ? FROM ${table} WHERE ${predicate}`,
     [...values, actor, actor, ...identityParams]
   )
   return rows.length
