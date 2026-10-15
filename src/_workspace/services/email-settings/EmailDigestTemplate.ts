@@ -67,7 +67,7 @@ export const sendDigestEmail = async (recipient: DigestRecipientRow, items: Dige
         <div style="margin-top:5px;font-size:13px;color:#6b7280">Import Customs Declaration Documents</div>
       </td></tr>
       <tr><td style="padding:22px 28px 8px;font-size:14px;line-height:1.7">
-        <p style="margin:0 0 10px;font-weight:bold">เรียน เจ้าหน้าที่บัญชี</p>
+        <p style="margin:0 0 10px;font-weight:bold">เรียน เจ้าหน้าที่บัญชีที่เกี่ยวข้อง</p>
         <p style="margin:0">โปรดตรวจสอบเอกสาร PDF ใบขนขาเข้าที่บันทึกไว้บน Server Share ตามรายการด้านล่าง</p>
         <p style="margin:4px 0 0;color:#6b7280">Please review the import customs declaration PDFs saved to the Server Share.</p>
       </td></tr>
