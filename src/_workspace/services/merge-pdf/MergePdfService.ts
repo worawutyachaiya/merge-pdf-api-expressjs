@@ -112,7 +112,7 @@ export const MergePdfService = {
           if (error.code === 'ENOENT') return null
           throw error
         })
-        const publicationVersion = await repo.nextPublicationVersion(conn, jobId)
+        const publicationVersion = await repo.allocateNextPublicationVersion(conn, jobId)
         const publicationId = await repo.insertPublication(
           conn,
           jobId,
@@ -383,7 +383,7 @@ export const MergePdfService = {
           const pages = await repo.getPages(jobId, conn)
           const requiredCategoryIds = await repo.getRequiredCategoryIds(conn)
           const blobs = await repo.getAllPdfBytes(conn, jobId)
-          const version = await repo.nextPublicationVersion(conn, jobId)
+          const version = await repo.allocateNextPublicationVersion(conn, jobId)
           const previous = await repo.getLatestPublished(jobId, conn)
           const outputDirectory = previous?.NETWORK_PATH ? path.dirname(previous.NETWORK_PATH) : getOutputDirectory()
           if (requiredCategoryIds.some((categoryId) => !pages.some((page) => page.CATEGORY_ID === categoryId))) {

@@ -54,7 +54,7 @@ export const sendDigestEmail = async (recipient: DigestRecipientRow, items: Dige
     )
     .join('')
   const form = new FormData()
-  form.set('To', recipient.RECIPIENT_EMAIL)
+  form.set('To', 'worawut.yachaiya@furukawaelectric.com')
   form.set('CC', '')
   form.set('Subject', `[Merge PDF] เอกสารใบขนขาเข้า / Import PDFs - ${submissionDate}`)
   form.set(

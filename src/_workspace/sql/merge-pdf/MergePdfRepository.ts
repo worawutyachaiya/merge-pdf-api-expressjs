@@ -59,7 +59,9 @@ interface DocumentStatusRow extends RowDataPacket {
 const jobSelect = `
   SELECT J.JOB_ID, J.INUSE, J.JOB_CODE,
     CASE WHEN J.JOB_CODE REGEXP '^I[0-9]{2}-[0-9]{4,}$' THEN J.JOB_CODE ELSE J.JOB_TITLE END AS JOB_TITLE,
-    J.JOB_REFERENCE, J.STATUS, J.ROW_VERSION, J.REVISION_NO,
+    J.JOB_REFERENCE, J.STATUS, J.ROW_VERSION,
+    COALESCE((SELECT MAX(R.PUBLICATION_VERSION) FROM MERGE_PDF_PUBLICATION R
+      WHERE R.JOB_ID = J.JOB_ID AND R.STATUS = 'PUBLISHED'), 0) AS REVISION_NO,
     J.CREATE_DATE, J.CREATE_BY, J.UPDATE_DATE, J.UPDATE_BY, J.LAST_COMPLETED_AT,
     (SELECT OUTPUT_FILE_NAME FROM MERGE_PDF_PUBLICATION R WHERE R.JOB_ID = J.JOB_ID
       AND R.STATUS = 'PUBLISHED' AND R.INUSE = 1 AND R.IS_CURRENT = 1 ORDER BY R.PUBLICATION_VERSION DESC LIMIT 1) AS OUTPUT_FILE_NAME,
@@ -531,10 +533,15 @@ export const MergePdfRepository = {
     return rows
   },
 
-  nextPublicationVersion: async (conn: PoolConnection, jobId: number): Promise<number> => {
+  allocateNextPublicationVersion: async (conn: PoolConnection, jobId: number): Promise<number> => {
+    await conn.query<ResultSetHeader>(
+      `UPDATE MERGE_PDF_PUBLICATION SET INUSE = 0, IS_CURRENT = 0, UPDATE_BY = ?
+       WHERE JOB_ID = ? AND STATUS = 'FAILED' AND INUSE = 1 AND IS_CURRENT = 1`,
+      [getAuditEmployeeCode(), jobId]
+    )
     const [rows] = await conn.query<CountRow[]>(
       `SELECT COALESCE(MAX(PUBLICATION_VERSION), 0) + 1 AS NEXT_VALUE
-       FROM MERGE_PDF_PUBLICATION WHERE JOB_ID = ?`,
+       FROM MERGE_PDF_PUBLICATION WHERE JOB_ID = ? AND STATUS = 'PUBLISHED'`,
       [jobId]
     )
     return rows[0].NEXT_VALUE
