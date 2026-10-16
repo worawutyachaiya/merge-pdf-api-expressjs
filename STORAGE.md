@@ -81,7 +81,9 @@ columns and indexes before this API version starts. Existing data is retained as
 
 The localhost/development-only middleware has been removed. Environment mode does not block API routes.
 Settings is a separate menu (Security Center ID 730), with its page at
-`src/_workspace/pages/settings` and its URL at `/settings`. It contains Document order and Accounting email tabs.
+`src/_workspace/pages/settings` and its URL at `/settings`. Document order and Accounting email appear
+on the same page, side by side on larger screens and stacked on smaller screens, with separate Save/Reset actions.
+Document types can be dragged into order with the pointer or reordered using Space and arrow keys; changes are saved explicitly.
 The old `/email-settings` and `/merge-pdf/email-settings` page URLs redirect to Settings.
 Accounting email retains separate API routes/controllers/services/SQL under `email-settings`. The API uses GET `/email-settings/get`,
 GET `/email-settings/accounting-people` and PATCH `/email-settings/update`. Merge PDF routes are mounted
