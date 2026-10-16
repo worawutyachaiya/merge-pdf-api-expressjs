@@ -1,6 +1,7 @@
 // Entity identifiers remain stable across revisions so document/page/mail references stay valid.
 // The physical primary key is (entity identifier(s), REVISION_NO).
 const records = {
+  MERGE_PDF_CATEGORY: ['CATEGORY_ID', 'CATEGORY_CODE CATEGORY_NAME SORT_ORDER REQUIRED_FOR_COMPLETE'],
   MERGE_PDF_JOB: ['JOB_ID', 'JOB_CODE JOB_REFERENCE JOB_TITLE STATUS ROW_VERSION LAST_COMPLETED_AT'],
   MERGE_PDF_DOCUMENT: [
     'DOCUMENT_ID',

@@ -80,13 +80,23 @@ not modify an existing table definition; the existing configured database must a
 columns and indexes before this API version starts. Existing data is retained as revision 1.
 
 The localhost/development-only middleware has been removed. Environment mode does not block API routes.
-Email Settings is a separate menu (Security Center ID 730), with its page at
-`src/_workspace/pages/email-settings`, its URL at `/email-settings`, and separate API
-routes/controllers/services/SQL under `email-settings`. The API uses GET `/email-settings/get`,
+Settings is a separate menu (Security Center ID 730), with its page at
+`src/_workspace/pages/settings` and its URL at `/settings`. It contains Document order and Accounting email tabs.
+The old `/email-settings` and `/merge-pdf/email-settings` page URLs redirect to Settings.
+Accounting email retains separate API routes/controllers/services/SQL under `email-settings`. The API uses GET `/email-settings/get`,
 GET `/email-settings/accounting-people` and PATCH `/email-settings/update`. Merge PDF routes are mounted
 under `/merge-pdf`, with file handling and business logic in its controller/services. The scheduler is started
-from `_workspace/jobs/emailDigestJob.ts` after the API starts, following the masterdata job pattern. The previous page URL redirects to the new URL.
+from `_workspace/jobs/emailDigestJob.ts` after the API starts, following the masterdata job pattern.
 The Save action uses the menu's `IS_UPDATE` permission through the existing project helper.
+
+Document order uses the existing `MERGE_PDF_CATEGORY.SORT_ORDER`; no new tables or columns are needed.
+GET `/settings/document-order/get` returns current categories in their configured order.
+PATCH `/settings/document-order/update` accepts the complete ordered list of category IDs and their
+revision numbers. Saves reject stale/incomplete lists and retire the current group before inserting
+replacement revisions in one transaction, preserving audit employee codes and old ordering.
+The editor loads the latest saved order before an import batch or Sort by document type action;
+pages of the same type keep their relative order. Settings changes do not reorder saved PDFs.
+Page changes remain local until the document is explicitly saved.
 
 Query construction follows masterdata's service/SQL split. `sql/merge-pdf/MergePdfSQL.ts` and
 `sql/email-settings/EmailSettingsSQL.ts` build SQL without accessing connections or services.
