@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'trade-compliance-web-api-7097-expressjs-uat',
+      name: 'merge-pdf-web-api-7105-expressjss-uat',
       script: 'npm',
       args: 'run start:uat',
       env: {
