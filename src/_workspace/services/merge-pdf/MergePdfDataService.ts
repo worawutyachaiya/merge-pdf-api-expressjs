@@ -238,6 +238,8 @@ export const MergePdfDataService = {
       normalizedHash: Buffer
       pageCount: number
       entryStatusCode: string | null
+      entryStatusSource?: 'USER' | 'DOCUMENT' | null
+      description?: string | null
     }
   ): Promise<number> => {
     const [result] = await conn.execute<ResultSetHeader>(MergePdfSQL.insertDocument(), [
@@ -253,7 +255,8 @@ export const MergePdfDataService = {
       input.normalizedHash,
       input.pageCount,
       input.entryStatusCode,
-      input.entryStatusCode ? 'USER' : null,
+      input.entryStatusCode ? (input.entryStatusSource ?? 'USER') : null,
+      input.description ?? null,
       getAuditEmployeeCode(),
       getAuditEmployeeCode(),
     ])
@@ -280,7 +283,9 @@ export const MergePdfDataService = {
     documentId: number,
     count: number,
     firstOrder: number,
-    classifications?: readonly PageClassification[]
+    classifications?: readonly PageClassification[],
+    description: string | null = null,
+    categoryId = 10
   ): Promise<void> => {
     if (classifications && classifications.length !== count) throw new Error('Page classification count mismatch')
     for (let index = 0; index < count; index += 1) {
@@ -293,6 +298,7 @@ export const MergePdfDataService = {
         classification?.confidence ?? null,
         index + 1,
         firstOrder + index,
+        (classification?.categoryId ?? categoryId) === 10 ? description : null,
         getAuditEmployeeCode(),
         getAuditEmployeeCode(),
       ])
@@ -314,9 +320,18 @@ export const MergePdfDataService = {
     conn: PoolConnection,
     jobId: number,
     pageId: number,
-    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number }
+    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number; DESCRIPTION: string | null }
   ): Promise<void> => {
     await replaceActiveRecords(conn, 'MERGE_PDF_PAGE', MergePdfSQL.whereJobPage(), [jobId, pageId], changes, getAuditEmployeeCode())
+  },
+
+  updateDocumentMetadata: async (
+    conn: PoolConnection,
+    jobId: number,
+    documentId: number,
+    changes: { DESCRIPTION: string | null; ENTRY_STATUS_CODE: string | null; ENTRY_STATUS_SOURCE: string | null }
+  ): Promise<void> => {
+    await replaceActiveRecords(conn, 'MERGE_PDF_DOCUMENT', MergePdfSQL.whereJobDocument(), [jobId, documentId], changes, getAuditEmployeeCode())
   },
 
   rotatePage: async (conn: PoolConnection, jobId: number, pageId: number, delta: 90 | 270): Promise<number> => {
