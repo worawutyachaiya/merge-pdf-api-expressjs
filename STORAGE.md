@@ -36,11 +36,13 @@ filename is unclear, it reads PDF text headings (up to the existing 500-page lim
 default to Other. Users can override suggestions, including while detection is running; late results
 never overwrite their choice or restore removed files. Detection uses POST `/merge-pdf/editor/detect-document-type`
 and does not save files or database rows. Import waits until queued detection finishes.
-The multiline Description above Import is required when the batch contains Other pages, including
-unclassified pages from Combined files. The whole batch is prepared and validated before adding pages,
+Each queued file shows its own Description beside the document-type selector only when its type is Other.
+Other types do not display this field. Combined files show a per-file Description after preparation detects
+Other/unclassified pages in that file. Each Other file needs its own description before importing.
+The whole batch is prepared and validated before adding pages,
 so a missing description does not leave a partially imported batch. MERGE_PDF_DOCUMENT.DESCRIPTION
-stores the source import description and MERGE_PDF_PAGE.DESCRIPTION stores each page's editable
-description (nullable VARCHAR(1000), included in revision history). Other pages start with the import
+stores that file's import description and MERGE_PDF_PAGE.DESCRIPTION stores each page's editable
+description (nullable VARCHAR(1000), included in revision history). Other pages start with their file's import
 description; their descriptions can be edited individually in the page preview. Save Draft and completion
 both reject Other pages with missing descriptions. Existing records retain NULL until described.
 Existing databases need these two nullable DESCRIPTION columns as defined in schema.sql; the configured
