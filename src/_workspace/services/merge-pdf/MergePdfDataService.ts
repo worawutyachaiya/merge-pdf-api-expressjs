@@ -256,7 +256,7 @@ export const MergePdfDataService = {
       input.pageCount,
       input.entryStatusCode,
       input.entryStatusCode ? (input.entryStatusSource ?? 'USER') : null,
-      input.description ?? null,
+      input.categoryId === 10 ? (input.description ?? null) : null,
       getAuditEmployeeCode(),
       getAuditEmployeeCode(),
     ])
@@ -311,7 +311,7 @@ export const MergePdfDataService = {
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
-      { CATEGORY_ID: categoryId, CLASSIFICATION_SOURCE: 'USER', CLASSIFICATION_CONFIDENCE: null },
+      { CATEGORY_ID: categoryId, CLASSIFICATION_SOURCE: 'USER', CLASSIFICATION_CONFIDENCE: null, ...(categoryId === 10 ? {} : { DESCRIPTION: null }) },
       getAuditEmployeeCode()
     )
   },
@@ -322,7 +322,14 @@ export const MergePdfDataService = {
     pageId: number,
     changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number; DESCRIPTION: string | null }
   ): Promise<void> => {
-    await replaceActiveRecords(conn, 'MERGE_PDF_PAGE', MergePdfSQL.whereJobPage(), [jobId, pageId], changes, getAuditEmployeeCode())
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_PAGE',
+      MergePdfSQL.whereJobPage(),
+      [jobId, pageId],
+      { ...changes, DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null },
+      getAuditEmployeeCode()
+    )
   },
 
   updateDocumentMetadata: async (

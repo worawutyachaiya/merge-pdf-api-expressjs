@@ -45,6 +45,10 @@ stores that file's import description and MERGE_PDF_PAGE.DESCRIPTION stores each
 description (nullable VARCHAR(1000), included in revision history). Other pages start with their file's import
 description; their descriptions can be edited individually in the page preview. Save Draft and completion
 both reject Other pages with missing descriptions. Existing records retain NULL until described.
+Description inputs appear only for Other files/pages. Saving other types stores NULL even if stale
+description text is submitted. Changing an Other page to a different type clears its current description
+when saved; previous revisions retain the old text. Validation runs on Save so users can finish editing
+the description before submitting Draft or completion changes.
 Existing databases need these two nullable DESCRIPTION columns as defined in schema.sql; the configured
 development database has been updated. Fresh databases receive them from the complete schema file.
 Selected pages can change type, rotate or be removed in one transaction with one row-version update.

@@ -74,7 +74,7 @@ const persistDocument = async (
       pageCount: normalized.pageCount,
       entryStatusCode: entryStatusCode ?? (autoConfirmed ? '04' : null),
       entryStatusSource: autoConfirmed ? 'DOCUMENT' : 'USER',
-      description,
+      description: categoryId === 10 && hasOther ? description : null,
     })
     await repo.insertPages(conn, jobId, documentId, normalized.pageCount, firstOrder, classifications, description, categoryId)
     const pages = await repo.getPages(jobId, conn)

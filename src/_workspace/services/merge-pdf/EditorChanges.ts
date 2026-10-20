@@ -46,13 +46,21 @@ export const editorChangesSchema = z
       )
       .max(500),
   })
+  .transform((changes) => ({
+    ...changes,
+    pages: changes.pages.map((page) => ({ ...page, DESCRIPTION: page.CATEGORY_ID === 10 ? page.DESCRIPTION : null })),
+    documents: changes.documents.map((doc) => ({
+      ...doc,
+      DESCRIPTION: doc.CATEGORY_ID === 10 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) ? doc.DESCRIPTION : null,
+    })),
+  }))
   .superRefine((changes, ctx) => {
     for (const [index, page] of changes.pages.entries()) {
       if (page.CATEGORY_ID === 10 && !page.DESCRIPTION)
         ctx.addIssue({ code: 'custom', path: ['pages', index, 'DESCRIPTION'], message: 'Description is required for every Other page' })
     }
     for (const [index, doc] of changes.documents.entries()) {
-      if (doc.DOCUMENT_ID < 0 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) && !doc.DESCRIPTION)
+      if (doc.DOCUMENT_ID < 0 && doc.CATEGORY_ID === 10 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) && !doc.DESCRIPTION)
         ctx.addIssue({ code: 'custom', path: ['documents', index, 'DESCRIPTION'], message: 'Import description is required for Other documents' })
     }
   })
@@ -144,6 +152,8 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
     }
     const entryPages = changes.pages.filter((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 1).map((page) => page.SOURCE_PAGE_NUMBER)
     const original = existingDocuments.find((item) => item.DOCUMENT_ID === doc.DOCUMENT_ID)
+    const documentDescription =
+      (original?.CATEGORY_ID ?? doc.CATEGORY_ID) === 10 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) ? doc.DESCRIPTION : null
     const status = entryPages.length ? doc.ENTRY_STATUS_CODE : null
     let source: string | null = status ? 'USER' : null
     if (status && doc.ENTRY_STATUS_SOURCE === 'DOCUMENT') {
@@ -158,8 +168,8 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
         throw new z.ZodError([{ code: 'custom', path: ['documents'], message: 'Status 04 could not be verified from this document. Please confirm it manually.' }])
       source = 'DOCUMENT'
     } else if (status && original?.ENTRY_STATUS_SOURCE === 'SYSTEM' && original.ENTRY_STATUS_CODE === status && doc.ENTRY_STATUS_SOURCE === 'SYSTEM') source = 'SYSTEM'
-    if (!original || original.DESCRIPTION !== doc.DESCRIPTION || original.ENTRY_STATUS_CODE !== status || original.ENTRY_STATUS_SOURCE !== source)
-      await repo.updateDocumentMetadata(conn, jobId, documentId, { DESCRIPTION: doc.DESCRIPTION, ENTRY_STATUS_CODE: status, ENTRY_STATUS_SOURCE: source })
+    if (!original || original.DESCRIPTION !== documentDescription || original.ENTRY_STATUS_CODE !== status || original.ENTRY_STATUS_SOURCE !== source)
+      await repo.updateDocumentMetadata(conn, jobId, documentId, { DESCRIPTION: documentDescription, ENTRY_STATUS_CODE: status, ENTRY_STATUS_SOURCE: source })
   }
   await repo.reorderPages(conn, jobId, keep)
 }
