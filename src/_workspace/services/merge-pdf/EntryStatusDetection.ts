@@ -2,9 +2,10 @@ import { loadPdfJs } from './PdfJs'
 
 // Require a labelled current-status field, never a bare "04" or a reference number.
 const label = '(?:(?:IMPORT |CUSTOMS )?DECLARATION STATUS|ENTRY STATUS|CUSTOMS STATUS|STATUS(?: CODE)?|สถานะ(?:ใบขน(?:สินค้า)?|เอกสาร)?)'
-const statusField = new RegExp(`^${label}\\s*[:：=\\-]?\\s*(\\d{2})(?:\\s*\\([^()\\d]*\\)|\\s*[-–]\\s*[^:\\d]+)?$`, 'u')
+const statusField = new RegExp(`^${label}\\s*[:：=\\-]?\\s*(\\d{2})\\d*(?:\\s*\\([^()\\d]*\\)|\\s*[-–]\\s*[^:\\d]+)?$`, 'u')
 const statusLabel = new RegExp(`^${label}\\s*[:：=\\-]?\\s*$`, 'u')
 const statusPrefix = new RegExp(`^${label}(?:\\s|[:：=\\-]|$)`, 'u')
+const statusValue = /^(\d{2})\d*(?:\s*\([^\d]*\))?$/u
 
 export const hasConfirmedStatus04 = (lines: readonly string[]): boolean => {
   const normalized = lines
@@ -23,7 +24,7 @@ export const hasConfirmedStatus04 = (lines: readonly string[]): boolean => {
     const match = statusField.exec(line)
     if (match) statuses.add(match[1])
     else if (statusLabel.test(line)) {
-      const next = /^(\d{2})(?:\s*\([^\d]*\))?$/.exec(normalized[index + 1] ?? '')
+      const next = statusValue.exec(normalized[index + 1] ?? '')
       if (!next) return false
       statuses.add(next[1])
     } else if (statusPrefix.test(line)) return false
