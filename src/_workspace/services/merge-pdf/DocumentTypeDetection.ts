@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
-import { classifyCombinedPdf, classifyDocumentHeadings } from './CombinedPdfClassification'
+import { classifyCombinedPdfWithText, classifyDocumentHeadings } from './CombinedPdfClassification'
 
 const other = (): PageClassification => ({ categoryId: 10, source: 'UNKNOWN', confidence: null })
 
@@ -33,13 +33,15 @@ export const detectDocumentFileName = (fileName: string): PageClassification => 
 
 export const detectDocumentType = async (fileName: string, bytes: Buffer): Promise<PageClassification> => {
   const named = detectDocumentFileName(fileName)
-  if (named.source === 'FILENAME') return named
   try {
     if (/\.pdf$/i.test(fileName)) {
-      const pages = await classifyCombinedPdf(bytes)
-      const types = new Set(pages.filter((page) => page.source === 'AUTO_TEXT').map((page) => page.categoryId))
-      return types.size === 1 ? { categoryId: [...types][0], source: 'AUTO_TEXT', confidence: 0.95 } : other()
+      const classified = await classifyCombinedPdfWithText(bytes)
+      const types = new Set(classified.pages.filter((page) => page.source === 'AUTO_TEXT').map((page) => page.categoryId))
+      if (types.size === 1) return { categoryId: [...types][0], source: 'AUTO_TEXT', confidence: 0.95 }
+      if (types.size > 1 || classified.hasExtractableText) return other()
+      return named.source === 'FILENAME' ? named : other()
     }
+    if (named.source === 'FILENAME') return named
     if (/\.xlsx?$/i.test(fileName)) {
       const workbook = XLSX.read(bytes, { type: 'buffer', sheetRows: 40, cellFormula: false, cellHTML: false })
       const lines = workbook.SheetNames.slice(0, 10).flatMap((name) => {

@@ -5,6 +5,7 @@ import { getPageThumbnail, renderPdfThumbnails } from '@src/_workspace/services/
 import { normalizeFile, extractPage } from '@src/_workspace/services/merge-pdf/PdfEngine'
 import { classifyCombinedPdf } from '@src/_workspace/services/merge-pdf/CombinedPdfClassification'
 import { detectDocumentType } from '@src/_workspace/services/merge-pdf/DocumentTypeDetection'
+import { detectEntryStatus04 } from '@src/_workspace/services/merge-pdf/EntryStatusDetection'
 import { editorChangesSchema, prepareEditorUploads } from '@src/_workspace/services/merge-pdf/EditorChanges'
 import { AuditActorError, withAuditActor } from '@src/_workspace/services/merge-pdf/AuditActor'
 import {
@@ -81,6 +82,9 @@ export const MergePdfController = {
       if (combined && !req.file.originalname.toLowerCase().endsWith('.pdf')) throw new Error('Combined file must be a PDF')
       const normalized = await normalizeFile(req.file.originalname, req.file.buffer)
       const classifications = combined ? await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount) : null
+      const categoryId = z.coerce.number().int().min(1).max(10).default(10).parse(req.body.categoryId)
+      const entryPages = Array.from({ length: normalized.pageCount }, (_, index) => index + 1).filter((number) => (classifications?.[number - 1].categoryId ?? categoryId) === 1)
+      const confirmed = normalized.sourceType === 'PDF' && (await detectEntryStatus04(normalized.pdfBytes, entryPages))
       const images = await renderPdfThumbnails(normalized.pdfBytes, normalized.pageCount)
       res.json({
         Status: true,
@@ -92,6 +96,8 @@ export const MergePdfController = {
             pdf: normalized.pdfBytes.toString('base64'),
             thumbnails: images.map((image) => image.toString('base64')),
             classifications,
+            entryStatusCode: confirmed ? '04' : null,
+            entryStatusSource: confirmed ? 'DOCUMENT' : null,
           },
         ],
       })
@@ -188,7 +194,15 @@ export const MergePdfController = {
     const fields = uploadFields.parse(req.body)
     respond(
       res,
-      await MergePdfService.addDocument(id.parse(req.params.jobId), fields.rowVersion, fields.categoryId, fields.entryStatusCode ?? null, req.file.originalname, req.file.buffer),
+      await MergePdfService.addDocument(
+        id.parse(req.params.jobId),
+        fields.rowVersion,
+        fields.categoryId,
+        fields.entryStatusCode ?? null,
+        req.file.originalname,
+        req.file.buffer,
+        fields.description ?? null
+      ),
       'Upload Merge PDF document',
       201
     )
@@ -198,7 +212,7 @@ export const MergePdfController = {
     const fields = combinedUploadFields.parse(req.body)
     respond(
       res,
-      await MergePdfService.addCombinedDocument(id.parse(req.params.jobId), fields.rowVersion, req.file.originalname, req.file.buffer),
+      await MergePdfService.addCombinedDocument(id.parse(req.params.jobId), fields.rowVersion, req.file.originalname, req.file.buffer, fields.description ?? null),
       'Upload combined Merge PDF document',
       201
     )

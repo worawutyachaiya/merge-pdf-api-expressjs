@@ -35,13 +35,14 @@ export const batchFields = versionFields.extend({
 export const uploadFields = z.object({
   rowVersion: z.coerce.number().int().positive(),
   categoryId: z.coerce.number().int().min(1).max(10),
+  description: z.string().trim().max(1000).nullable().optional(),
   entryStatusCode: z
     .string()
     .regex(/^\d{2}$/)
     .optional(),
 })
 
-export const combinedUploadFields = z.object({ rowVersion: z.coerce.number().int().positive() })
+export const combinedUploadFields = z.object({ rowVersion: z.coerce.number().int().positive(), description: z.string().trim().max(1000).nullable().optional() })
 
 export const pageCategoryFields = versionFields.extend({ categoryId: z.number().int().min(1).max(10) })
 

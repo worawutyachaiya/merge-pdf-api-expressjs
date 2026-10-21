@@ -6,12 +6,13 @@ const unknown = (): PageClassification => ({ categoryId: 10, source: 'UNKNOWN', 
 
 // Match document headings, not references such as "Invoice No." in another form.
 const headings: { categoryId: number; pattern: RegExp }[] = [
-  { categoryId: 1, pattern: /^(?:IMPORT (?:ENTRY|DECLARATION)|CUSTOMS IMPORT DECLARATION|ใบขนสินค้าขาเข้า|ใบขนสินค้าขาเข้าและแบบแสดงรายการภาษีสรรพสามิต)$/ },
-  { categoryId: 2, pattern: /^(?:(?:COMMERCIAL|TAX|PROFORMA|PRO FORMA|CUSTOMS) )?INVOICE$/ },
+  { categoryId: 1, pattern: /^(?:IMPORT (?:ENTRY|DECLARATION)|CUSTOMS IMPORT DECLARATION|ใบขนสินค้าขาเข้า(?:$|พร้อม|และ|\s))/ },
+  { categoryId: 2, pattern: /^(?:(?:(?:COMMERCIAL|TAX|PROFORMA|PRO FORMA|CUSTOMS) )?INVOICE|.*\bINVOICE\s*#)$/ },
   { categoryId: 3, pattern: /^(?:PACKING LIST|PACKING SLIP)$/ },
   { categoryId: 4, pattern: /^(?:(?:HOUSE )?AIR WAYBILL|(?:HOUSE )?AIR WAY BILL|HAWB|AWB)$/ },
   { categoryId: 5, pattern: /^(?:MASTER AIR WAY ?BILL|MAWB)$/ },
   { categoryId: 6, pattern: /^(?:TISI (?:IMPORT )?(?:PERMIT|LICENSE)|(?:IMPORT )?(?:PERMIT|LICENSE) TISI|ใบอนุญาตนำเข้าผลิตภัณฑ์อุตสาหกรรม)$/ },
+  { categoryId: 6, pattern: /^หลกฐานการรบ.{0,30}ผลตภณฑอตสาหกรรม/ },
   { categoryId: 7, pattern: /^(?:CUSTOMS (?:RECEIPT|PAYMENT RECEIPT)|ใบเสร็จรับเงินกรมศุลกากร|ใบเสร็จศุลกากร)$/ },
   { categoryId: 8, pattern: /^DELIVERY ORDER$/ },
   { categoryId: 9, pattern: /^DELIVERY NOTE$/ },
@@ -27,18 +28,25 @@ export const classifyDocumentHeadings = (lines: readonly string[]): PageClassifi
       .replace(/\s+/g, ' ')
       .trim()
       .toUpperCase()
-    for (const heading of headings) if (heading.pattern.test(text)) matches.add(heading.categoryId)
+    const thaiBaseText = text.replace(/[\uE000-\uF8FF]/g, '').replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '')
+    for (const heading of headings) {
+      if (heading.pattern.test(text) || heading.pattern.test(thaiBaseText)) matches.add(heading.categoryId)
+    }
   }
   return matches.size === 1 ? { categoryId: [...matches][0], source: 'AUTO_TEXT', confidence: 0.95 } : unknown()
 }
 
-export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Promise<PageClassification[]> => {
+export const classifyCombinedPdfWithText = async (
+  bytes: Buffer,
+  pageCount?: number
+): Promise<{ pages: PageClassification[]; hasExtractableText: boolean }> => {
   const results = Array.from({ length: pageCount ?? 0 }, unknown)
+  let hasExtractableText = false
   let task: Awaited<ReturnType<typeof loadPdfJs>> | undefined
   try {
     task = await loadPdfJs(bytes)
     const pdf = await task.promise
-    if (pageCount !== undefined && pdf.numPages !== pageCount) return results
+    if (pageCount !== undefined && pdf.numPages !== pageCount) return { pages: results, hasExtractableText }
     const count = pageCount ?? Math.min(pdf.numPages, 500)
     if (pageCount === undefined) results.push(...Array.from({ length: count }, unknown))
     for (let index = 0; index < count; index++) {
@@ -46,6 +54,7 @@ export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Pr
       try {
         const viewport = page.getViewport({ scale: 1 })
         const content = await page.getTextContent()
+        hasExtractableText ||= content.items.some((item) => 'str' in item && item.str.trim().length > 0)
         const lines: { y: number; items: { x: number; text: string }[] }[] = []
         for (const item of content.items) {
           if (!('str' in item) || !item.str.trim()) continue
@@ -76,9 +85,12 @@ export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Pr
       }
     }
   } catch {
-    return results
+    return { pages: results, hasExtractableText }
   } finally {
     await task?.destroy()
   }
-  return results
+  return { pages: results, hasExtractableText }
 }
+
+export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Promise<PageClassification[]> =>
+  (await classifyCombinedPdfWithText(bytes, pageCount)).pages

@@ -23,13 +23,34 @@ Save & Complete writes the merged PDF; Save Changes replaces the same file at th
 The list previews the current PDF, and Source documents downloads each original uploaded file.
 Combined PDF imports classify clear document headings from the text layer on each page.
 Scanned pages, conflicting headings and pages without a recognized heading remain unclassified
-for manual selection. No OCR is performed, and import-entry status 04 still requires confirmation.
+for manual selection. No OCR is performed. Import-entry status 04 is confirmed automatically only
+when every selected import-entry page has an unambiguous labelled status 04 in its PDF text layer.
+Bare numbers, scans without text, unreadable fields, other status codes and conflicting/uncertain fields
+remain unconfirmed for the user to check. Automatic confirmations use ENTRY_STATUS_SOURCE=DOCUMENT;
+manual confirmations use USER. The API rechecks new automatic confirmations against the uploaded PDF
+when saving, and preserves the verified source on later saves. Confirmed Status 04 opens a confirmation
+dialog before the user can remove the confirmation; that edit takes effect only when saved.
 The Choose document type dropzone suggests a category per file using its filename first. If the
 filename is unclear, it reads PDF text headings (up to the existing 500-page limit) or Excel headings
 (first 40 rows of up to 10 sheets). Mixed/ambiguous types, scans without text and unreadable content
 default to Other. Users can override suggestions, including while detection is running; late results
 never overwrite their choice or restore removed files. Detection uses POST `/merge-pdf/editor/detect-document-type`
 and does not save files or database rows. Import waits until queued detection finishes.
+Each queued file shows its own Description beside the document-type selector only when its type is Other.
+Other types do not display this field. Combined files show a per-file Description after preparation detects
+Other/unclassified pages in that file. Each Other file needs its own description before importing.
+The whole batch is prepared and validated before adding pages,
+so a missing description does not leave a partially imported batch. MERGE_PDF_DOCUMENT.DESCRIPTION
+stores that file's import description and MERGE_PDF_PAGE.DESCRIPTION stores each page's editable
+description (nullable VARCHAR(1000), included in revision history). Other pages start with their file's import
+description; their descriptions can be edited individually in the page preview. Save Draft and completion
+both reject Other pages with missing descriptions. Existing records retain NULL until described.
+Description inputs appear only for Other files/pages. Saving other types stores NULL even if stale
+description text is submitted. Changing an Other page to a different type clears its current description
+when saved; previous revisions retain the old text. Validation runs on Save so users can finish editing
+the description before submitting Draft or completion changes.
+Existing databases need these two nullable DESCRIPTION columns as defined in schema.sql; the configured
+development database has been updated. Fresh databases receive them from the complete schema file.
 Selected pages can change type, rotate or be removed in one transaction with one row-version update.
 Invalid/stale selections are rejected before changes; deleting all pages of a source deactivates it.
 

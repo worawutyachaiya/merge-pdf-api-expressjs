@@ -12,6 +12,7 @@ import { FileSequenceInactiveError, getImportPrefix, isImportCode } from './Impo
 import { summarizeDocumentPages } from './DocumentStatus'
 import { removePublishedPdfs } from './PublicationDeletion'
 import { classifyCombinedPdf } from './CombinedPdfClassification'
+import { detectEntryStatus04 } from './EntryStatusDetection'
 import { applyEditorChanges, type PreparedEditorChanges } from './EditorChanges'
 import { EmailDigestService } from '@src/_workspace/services/email-settings/EmailDigestService'
 
@@ -48,8 +49,13 @@ const persistDocument = async (
   fileName: string,
   bytes: Buffer,
   normalized: NormalizedFile,
-  classifications?: readonly PageClassification[]
+  classifications?: readonly PageClassification[],
+  description: string | null = null
 ): Promise<JobDetail> => {
+  const hasOther = classifications ? classifications.some((page) => page.categoryId === 10) : categoryId === 10
+  if (hasOther && !description?.trim()) throw new MergePdfError('Description is required before importing Other documents', 400)
+  const entryPages = Array.from({ length: normalized.pageCount }, (_, index) => index + 1).filter((number) => (classifications?.[number - 1].categoryId ?? categoryId) === 1)
+  const autoConfirmed = !entryStatusCode && normalized.sourceType === 'PDF' && (await detectEntryStatus04(normalized.pdfBytes, entryPages))
   await MySQLExecute.withTransaction(async (conn) => {
     assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
     const uploadOrder = await repo.nextUploadOrder(conn, jobId)
@@ -66,9 +72,11 @@ const persistDocument = async (
       originalHash: sha256(bytes),
       normalizedHash: sha256(normalized.pdfBytes),
       pageCount: normalized.pageCount,
-      entryStatusCode,
+      entryStatusCode: entryStatusCode ?? (autoConfirmed ? '04' : null),
+      entryStatusSource: autoConfirmed ? 'DOCUMENT' : 'USER',
+      description: categoryId === 10 && hasOther ? description : null,
     })
-    await repo.insertPages(conn, jobId, documentId, normalized.pageCount, firstOrder, classifications)
+    await repo.insertPages(conn, jobId, documentId, normalized.pageCount, firstOrder, classifications, description, categoryId)
     const pages = await repo.getPages(jobId, conn)
     const added = pages.filter((page) => page.DOCUMENT_ID === documentId)
     const ordered = pages.filter((page) => page.DOCUMENT_ID !== documentId)
@@ -246,7 +254,15 @@ export const MergePdfService = {
     return { JOB_ID: jobId }
   },
 
-  addDocument: async (jobId: number, expectedVersion: number, categoryId: number, entryStatusCode: string | null, fileName: string, bytes: Buffer): Promise<JobDetail> => {
+  addDocument: async (
+    jobId: number,
+    expectedVersion: number,
+    categoryId: number,
+    entryStatusCode: string | null,
+    fileName: string,
+    bytes: Buffer,
+    description: string | null = null
+  ): Promise<JobDetail> => {
     if (categoryId !== 1 && entryStatusCode) throw new MergePdfError('Status applies only to import entry', 400)
     if (fileName.length < 1 || fileName.length > 255) throw new MergePdfError('File name is too long', 400)
     let normalized: Awaited<ReturnType<typeof normalizeFile>>
@@ -256,10 +272,10 @@ export const MergePdfService = {
       const message = error instanceof Error ? error.message : 'Invalid document'
       throw new MergePdfError(message, message.startsWith('Excel conversion is unavailable') ? 503 : 400)
     }
-    return persistDocument(jobId, expectedVersion, categoryId, entryStatusCode, fileName, bytes, normalized)
+    return persistDocument(jobId, expectedVersion, categoryId, entryStatusCode, fileName, bytes, normalized, undefined, description)
   },
 
-  addCombinedDocument: async (jobId: number, expectedVersion: number, fileName: string, bytes: Buffer): Promise<JobDetail> => {
+  addCombinedDocument: async (jobId: number, expectedVersion: number, fileName: string, bytes: Buffer, description: string | null = null): Promise<JobDetail> => {
     if (fileName.length < 1 || fileName.length > 255) throw new MergePdfError('File name is too long', 400)
     if (path.extname(fileName).toLowerCase() !== '.pdf') throw new MergePdfError('Combined file must be a PDF', 400)
     assertEditable(await repo.getJob(jobId), expectedVersion)
@@ -271,7 +287,7 @@ export const MergePdfService = {
       throw new MergePdfError(message, message.startsWith('Excel conversion is unavailable') ? 503 : 400)
     }
     const classifications = await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount)
-    return persistDocument(jobId, expectedVersion, 10, null, fileName, bytes, normalized, classifications)
+    return persistDocument(jobId, expectedVersion, 10, null, fileName, bytes, normalized, classifications, description)
   },
 
   updatePageCategory: async (jobId: number, pageId: number, expectedVersion: number, categoryId: number): Promise<JobDetail> => {
