@@ -31,6 +31,7 @@ interface PublishedRow extends PublicationRow {
 interface PageSourceRow extends RowDataPacket {
   SOURCE_PAGE_NUMBER: number
   ROTATION_DEGREES: number
+  DESKEW_DEGREES: number
   NORMALIZED_PDF_BYTES: Buffer
 }
 interface PageThumbnailRow extends RowDataPacket {
@@ -320,7 +321,7 @@ export const MergePdfDataService = {
     conn: PoolConnection,
     jobId: number,
     pageId: number,
-    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number; DESCRIPTION: string | null }
+    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number; DESKEW_DEGREES: number; DESCRIPTION: string | null }
   ): Promise<void> => {
     await replaceActiveRecords(
       conn,

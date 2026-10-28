@@ -8,6 +8,37 @@ export const getOutputDirectory = (): string => {
   return directory
 }
 
+// Translate only between the two configured representations of the same share.
+const shareDirectories = () => ({
+  linux: process.env.MERGE_PDF_LINUX_MOUNT_DIR?.trim(),
+  windows: process.env.MERGE_PDF_WINDOWS_SHARE_DIR?.trim()
+})
+
+export const publicationDirectory = (savedPath: string | null | undefined): string => {
+  const configured = getOutputDirectory()
+  if (!savedPath) return configured
+  const { linux, windows } = shareDirectories()
+  if (linux && windows) {
+    const linuxRoot = path.posix.normalize(linux).replace(/\/$/, '')
+    const windowsRoot = path.win32.normalize(windows).replace(/\\$/, '')
+    if (path.posix.dirname(savedPath) === linuxRoot && path.win32.normalize(configured).replace(/\\$/, '').toLowerCase() === windowsRoot.toLowerCase()) return configured
+    if (path.win32.dirname(savedPath).toLowerCase() === windowsRoot.toLowerCase() && path.posix.normalize(configured).replace(/\/$/, '') === linuxRoot) return configured
+  }
+  return path.dirname(savedPath)
+}
+
+// Return a Windows path only when the saved location is a Windows share or
+// is inside the configured Linux mount. Never invent a path for another mount.
+export const publicationSharePath = (savedPath: string | null): string | null => {
+  if (!savedPath) return null
+  if (savedPath.startsWith('\\\\')) return savedPath
+  const { linux, windows } = shareDirectories()
+  if (!linux || !windows) return null
+  const linuxRoot = path.posix.normalize(linux).replace(/\/$/, '')
+  if (path.posix.dirname(savedPath) !== linuxRoot) return null
+  return path.win32.join(windows, path.posix.basename(savedPath))
+}
+
 export class PublicationStorageError extends Error {
   readonly code: string
 

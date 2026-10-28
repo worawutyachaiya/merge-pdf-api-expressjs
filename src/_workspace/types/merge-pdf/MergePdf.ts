@@ -54,6 +54,7 @@ export interface PageSummary {
   DOCUMENT_ID: number
   SOURCE_PAGE_NUMBER: number
   ROTATION_DEGREES: number
+  DESKEW_DEGREES: number
   SORT_ORDER: number
   CATEGORY_ID: number
   CLASSIFICATION_SOURCE: ClassificationSource | null
@@ -65,6 +66,7 @@ export interface PublicationSummary {
   PUBLICATION_ID: number
   PUBLICATION_VERSION: number
   STATUS: 'PENDING' | 'PUBLISHED' | 'FAILED'
+  SHARE_PATH?: string | null
   OUTPUT_FILE_NAME: string
   NETWORK_PATH: string | null
   PUBLISHED_AT: string | null

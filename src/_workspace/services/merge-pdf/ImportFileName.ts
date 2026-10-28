@@ -10,3 +10,5 @@ export const getImportPrefix = (date = new Date()): string => {
   }).formatToParts(date)
   return `I${parts.find((part) => part.type === 'year')!.value}-${parts.find((part) => part.type === 'month')!.value}`
 }
+
+export const prefixForMonth = (month?: string): string => month ? `I${month.slice(2, 4)}-${month.slice(5, 7)}` : getImportPrefix()

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+﻿import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { readFile, unlink } from 'node:fs/promises'
 
@@ -6,9 +6,9 @@ import { MySQLExecute } from '@src/businessData/dbExecute'
 import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
 import type { BatchPageAction, JobDetail, JobSummary, PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
 
-import { extractPage, mergePages, normalizeFile, type NormalizedFile } from './PdfEngine'
-import { checkOutputDirectory, getOutputDirectory, publishPdf } from './PublicationStorage'
-import { FileSequenceInactiveError, getImportPrefix, isImportCode } from './ImportFileName'
+import { extractPage, mergePages, normalizeFile, stampDocumentName, type NormalizedFile } from './PdfEngine'
+import { checkOutputDirectory, publicationDirectory, publicationSharePath, publishPdf } from './PublicationStorage'
+import { FileSequenceInactiveError, getImportPrefix, prefixForMonth, isImportCode } from './ImportFileName'
 import { summarizeDocumentPages } from './DocumentStatus'
 import { removePublishedPdfs } from './PublicationDeletion'
 import { classifyCombinedPdf } from './CombinedPdfClassification'
@@ -38,7 +38,7 @@ const detail = async (jobId: number): Promise<JobDetail> => {
   const job = await repo.getJob(jobId)
   if (!job) throw new MergePdfError('Job not found', 404)
   const [documents, pages, publications] = await Promise.all([repo.getDocuments(jobId), repo.getPages(jobId), repo.getPublications(jobId)])
-  return { job: { ...job, ...summarizeDocumentPages(pages) }, documents, pages, publications }
+  return { job: { ...job, ...summarizeDocumentPages(pages) }, documents, pages, publications: publications.map(publication => ({ ...publication, SHARE_PATH: publicationSharePath(publication.NETWORK_PATH) })) }
 }
 
 const persistDocument = async (
@@ -112,12 +112,13 @@ export const MergePdfService = {
         if (previous && !isImportCode(job.JOB_CODE)) throw new MergePdfError('This document uses a legacy filename. Contact your administrator.', 409)
         const code = isImportCode(job.JOB_CODE) ? job.JOB_CODE : await repo.assignImportCode(conn, jobId, getImportPrefix())
         const fileName = `${code}.pdf`
-        const directory = previous?.NETWORK_PATH ? path.dirname(previous.NETWORK_PATH) : getOutputDirectory()
+        const directory = publicationDirectory(previous?.NETWORK_PATH)
         await checkOutputDirectory(directory)
         const blobs = await repo.getAllPdfBytes(conn, jobId)
         const pdf = await mergePages(
-          pages.map((page) => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES })),
-          new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
+          pages.map((page) => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES, deskewDegrees: page.DESKEW_DEGREES })),
+          new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES])),
+          code
         )
         const original = await readFile(path.join(directory, fileName)).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
@@ -149,8 +150,8 @@ export const MergePdfService = {
     })
     return detail(jobId)
   },
-  nextCode: async (): Promise<string> => {
-    const prefix = getImportPrefix()
+  nextCode: async (month?: string): Promise<string> => {
+    const prefix = prefixForMonth(month)
     const row = await repo.getNextImportNumber(prefix)
     if (row && row.INUSE !== 1) throw new MergePdfError('Monthly file numbering is inactive. Contact your administrator.', 409)
     return prefix + String(row?.NEXT_VALUE ?? 1).padStart(2, '0')
@@ -204,11 +205,11 @@ export const MergePdfService = {
   },
   detail,
 
-  create: async (_title: string, reference: string | null): Promise<JobDetail> => {
+  create: async (_title: string, reference: string | null, month?: string): Promise<JobDetail> => {
     const jobId = await MySQLExecute.withTransaction(async (conn) => {
       const id = await repo.insertJob(conn, randomUUID(), 'New document', reference)
       try {
-        await repo.assignImportCode(conn, id, getImportPrefix())
+        await repo.assignImportCode(conn, id, prefixForMonth(month))
       } catch (error) {
         if (error instanceof FileSequenceInactiveError) throw new MergePdfError(error.message, 409)
         throw error
@@ -384,7 +385,7 @@ export const MergePdfService = {
           publicationId: pending.PUBLICATION_ID,
           pdf: pending.OUTPUT_PDF_BYTES,
           fileName: pending.OUTPUT_FILE_NAME,
-          directory: pending.NETWORK_PATH ? path.dirname(pending.NETWORK_PATH) : getOutputDirectory(),
+          directory: publicationDirectory(pending.NETWORK_PATH),
           overwrite: !!current.LAST_COMPLETED_AT,
         }
       : await MySQLExecute.withTransaction(async (conn) => {
@@ -395,7 +396,7 @@ export const MergePdfService = {
           const blobs = await repo.getAllPdfBytes(conn, jobId)
           const version = await repo.allocateNextPublicationVersion(conn, jobId)
           const previous = await repo.getLatestPublished(jobId, conn)
-          const outputDirectory = previous?.NETWORK_PATH ? path.dirname(previous.NETWORK_PATH) : getOutputDirectory()
+          const outputDirectory = publicationDirectory(previous?.NETWORK_PATH)
           if (requiredCategoryIds.some((categoryId) => !pages.some((page) => page.CATEGORY_ID === categoryId))) {
             throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
           }
@@ -415,7 +416,7 @@ export const MergePdfService = {
             pages.map((page) => ({
               documentId: page.DOCUMENT_ID,
               sourcePageNumber: page.SOURCE_PAGE_NUMBER,
-              rotationDegrees: page.ROTATION_DEGREES,
+              rotationDegrees: page.ROTATION_DEGREES, deskewDegrees: page.DESKEW_DEGREES,
             })),
             new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
           )
@@ -431,10 +432,11 @@ export const MergePdfService = {
               throw error
             }
           }
+          const stampedPdf = await stampDocumentName(pdf, code)
           const fileName = `${code}.pdf`
           if (fields) await repo.updateJob(conn, jobId, code, fields.reference)
-          const publicationId = await repo.insertPublication(conn, jobId, version, fileName, pdf, sha256(pdf), pages.length, path.join(outputDirectory, fileName))
-          return { publicationId, pdf, fileName, directory: outputDirectory, overwrite: !!previous }
+          const publicationId = await repo.insertPublication(conn, jobId, version, fileName, stampedPdf, sha256(stampedPdf), pages.length, path.join(outputDirectory, fileName))
+          return { publicationId, pdf: stampedPdf, fileName, directory: outputDirectory, overwrite: !!previous }
         })
 
     let publishedPath: string | null = null
@@ -455,9 +457,9 @@ export const MergePdfService = {
 
   documentPdf: (documentId: number): Promise<Buffer | undefined> => repo.getDocumentPdf(documentId),
   originalDocument: (jobId: number, documentId: number) => repo.getOriginalDocument(jobId, documentId),
-  pagePdf: async (jobId: number, pageId: number, rotation?: number): Promise<Buffer | undefined> => {
+  pagePdf: async (jobId: number, pageId: number, rotation?: number, deskew?: number): Promise<Buffer | undefined> => {
     const source = await repo.getPagePdfSource(jobId, pageId)
-    return source ? extractPage(source.NORMALIZED_PDF_BYTES, source.SOURCE_PAGE_NUMBER, rotation ?? source.ROTATION_DEGREES) : undefined
+    return source ? extractPage(source.NORMALIZED_PDF_BYTES, source.SOURCE_PAGE_NUMBER, rotation ?? source.ROTATION_DEGREES, deskew ?? source.DESKEW_DEGREES) : undefined
   },
   publicationPdf: (jobId: number, publicationId: number): Promise<{ bytes: Buffer; fileName: string } | undefined> =>
     repo.getPublicationPdf(jobId, publicationId).then((row) =>

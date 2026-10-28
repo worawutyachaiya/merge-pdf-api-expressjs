@@ -7,12 +7,16 @@ and USE if needed, and set the API's DB configuration to that name. It is a comp
 not a sequence of migration scripts; it does not alter definitions of tables that already exist.
 Use MySQL 8.0.16+ and configure max_allowed_packet to at least 64 MiB on the server.
 
+For existing databases, apply `src/_workspace/sql/merge-pdf/migrations/20261028_add_page_deskew.sql` before deploying the Deskew-enabled API. New databases created with the current schema already include this column. The migration must only be applied once.
+
 Install API dependencies with `pnpm install` and use Node.js >=22.13 (Node.js 24 recommended).
 PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion also requires Windows Tahoma fonts.
 
 Set MERGE_PDF_OUTPUT_DIR to the output folder. The current environment files specify
 `\\192.168.14.35\C12_PM-Support\MergePDF_TEST`. The account running the API needs permission
 to read, create, rename and delete files there. Restart the API after environment changes.
+
+Set MERGE_PDF_LINUX_MOUNT_DIR and MERGE_PDF_WINDOWS_SHARE_DIR to the Linux mount and Windows UNC path for the same share in each API environment file. MERGE_PDF_OUTPUT_DIR remains the path used by the API host. The API translates saved paths between these configured directories and returns the UNC path for the UI. Restart the API after changing these settings.
 
 New drafts automatically reserve IYY-MMNN names using Asia/Bangkok year/month and a locked
 monthly sequence. Names remain the same on edits, and deleted numbers are never reused.

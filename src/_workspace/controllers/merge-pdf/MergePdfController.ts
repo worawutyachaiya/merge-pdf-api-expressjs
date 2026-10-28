@@ -114,7 +114,8 @@ export const MergePdfController = {
         z.coerce
           .number()
           .pipe(z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]))
-          .parse(req.body.rotation)
+          .parse(req.body.rotation),
+        z.coerce.number().min(-15).max(15).default(0).parse(req.body.deskew)
       )
       res.type('pdf').send(bytes)
     } catch {
@@ -157,10 +158,11 @@ export const MergePdfController = {
   }),
   create: safe('Create Merge PDF job', async (req, res) => {
     const fields = jobFields.parse(req.body)
-    respond(res, await MergePdfService.create(fields.title, fields.reference), 'Create Merge PDF job', 201)
+    respond(res, await MergePdfService.create(fields.title, fields.reference, fields.month), 'Create Merge PDF job', 201)
   }),
-  nextCode: safe('Preview next document code', async (_req, res) => {
-    respond(res, { code: await MergePdfService.nextCode() }, 'Preview next document code')
+  nextCode: safe('Preview next document code', async (req, res) => {
+    const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional().parse(req.query.month)
+    respond(res, { code: await MergePdfService.nextCode(month) }, 'Preview next document code')
   }),
   batchPages: safe('Update selected pages', async (req, res) => {
     const fields = batchFields.parse(req.body)
@@ -256,7 +258,7 @@ export const MergePdfController = {
     res.send(bytes)
   }),
   previewPage: safe('Preview Merge PDF page', async (req, res) => {
-    const bytes = await MergePdfService.pagePdf(id.parse(req.params.jobId), id.parse(req.params.pageId), previewRotation.parse(req.body?.rotation))
+    const bytes = await MergePdfService.pagePdf(id.parse(req.params.jobId), id.parse(req.params.pageId), previewRotation.parse(req.body?.rotation), z.number().min(-15).max(15).optional().parse(req.body?.deskew))
     if (!bytes) throw new MergePdfError('Page not found', 404)
     res.type('pdf').setHeader('Content-Disposition', 'inline; filename="page.pdf"')
     res.setHeader('Cache-Control', 'private, max-age=300')

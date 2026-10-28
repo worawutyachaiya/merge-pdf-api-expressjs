@@ -27,6 +27,7 @@ export const editorChangesSchema = z
           SOURCE_PAGE_NUMBER: z.number().int().positive(),
           CATEGORY_ID: z.number().int().min(1).max(10),
           ROTATION_DEGREES: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+          DESKEW_DEGREES: z.number().min(-15).max(15).default(0),
           CLASSIFICATION_SOURCE: z.enum(['AUTO_TEXT', 'AUTO_OCR', 'FILENAME', 'UNKNOWN', 'USER']).nullable(),
           CLASSIFICATION_CONFIDENCE: z.number().min(0).max(1).nullable(),
           DESCRIPTION: description,
@@ -130,6 +131,7 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
       original.CLASSIFICATION_SOURCE !== page.CLASSIFICATION_SOURCE ||
       original.CLASSIFICATION_CONFIDENCE !== page.CLASSIFICATION_CONFIDENCE ||
       original.ROTATION_DEGREES !== page.ROTATION_DEGREES ||
+      original.DESKEW_DEGREES !== page.DESKEW_DEGREES ||
       original.DESCRIPTION !== page.DESCRIPTION
     ) {
       await repo.updatePageDetails(conn, jobId, pageId, {
@@ -137,6 +139,7 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
         CLASSIFICATION_SOURCE: page.CLASSIFICATION_SOURCE,
         CLASSIFICATION_CONFIDENCE: page.CLASSIFICATION_CONFIDENCE,
         ROTATION_DEGREES: page.ROTATION_DEGREES,
+        DESKEW_DEGREES: page.DESKEW_DEGREES,
         DESCRIPTION: page.DESCRIPTION,
       })
     }

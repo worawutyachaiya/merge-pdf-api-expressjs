@@ -9,6 +9,7 @@ export const previewRotation = z.union([z.literal(0), z.literal(90), z.literal(1
 export const jobFields = z.object({
   title: z.string().trim().max(255).default(''),
   reference: z.string().trim().max(100).nullable(),
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
 })
 
 export const editFields = jobFields.extend({ rowVersion: version })

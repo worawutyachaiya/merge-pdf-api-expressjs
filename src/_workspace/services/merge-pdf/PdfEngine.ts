@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { PDFDocument, degrees } from 'pdf-lib'
+import { PDFDocument, degrees, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix } from 'pdf-lib'
 import sharp from 'sharp'
 
 import type { SourceType } from '@src/_workspace/types/merge-pdf/MergePdf'
@@ -20,7 +20,9 @@ export interface NormalizedFile {
 
 const detectSource = (fileName: string, bytes: Buffer): { type: SourceType; mime: string } => {
   const extension = path.extname(fileName).toLowerCase()
-  if (extension === '.pdf' && bytes.subarray(0, 5).toString('ascii') === '%PDF-') {
+  // Some PDF producers prepend text before the PDF header. The parser below
+  // still validates the document after the prefix is removed.
+  if (extension === '.pdf' && bytes.subarray(0, 1024).indexOf('%PDF-') !== -1) {
     return { type: 'PDF', mime: 'application/pdf' }
   }
   if (['.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'].includes(extension)) {
@@ -77,19 +79,37 @@ const applyRotation = (page: import('pdf-lib').PDFPage, rotationDegrees: number)
   page.setRotation(degrees((page.getRotation().angle + rotationDegrees) % 360))
 }
 
-export const extractPage = async (bytes: Buffer, sourcePageNumber: number, rotationDegrees: number): Promise<Buffer> => {
+// Rotate page content around the centre while keeping the page size and vector content.
+const applyDeskew = (page: import('pdf-lib').PDFPage, angle: number): void => {
+  if (!Number.isFinite(angle) || Math.abs(angle) > 15) throw new Error('Invalid deskew angle')
+  if (!angle) return
+  const { x, y, width, height } = page.getCropBox()
+  const cx = x + width / 2, cy = y + height / 2
+  const radians = angle * Math.PI / 180
+  const cos = Math.cos(radians), sin = Math.sin(radians)
+  page.node.normalize()
+  const start = page.doc.context.register(page.doc.context.contentStream([
+    pushGraphicsState(), concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
+  ]))
+  const end = page.doc.context.register(page.doc.context.contentStream([popGraphicsState()]))
+  page.node.wrapContentStreams(start, end)
+}
+
+export const extractPage = async (bytes: Buffer, sourcePageNumber: number, rotationDegrees: number, deskewDegrees = 0): Promise<Buffer> => {
   const source = await PDFDocument.load(bytes)
   if (sourcePageNumber < 1 || sourcePageNumber > source.getPageCount()) throw new Error('Invalid source page number')
   const output = await PDFDocument.create()
   const [page] = await output.copyPages(source, [sourcePageNumber - 1])
+  applyDeskew(page, deskewDegrees)
   applyRotation(page, rotationDegrees)
   output.addPage(page)
   return Buffer.from(await output.save())
 }
 
 export const mergePages = async (
-  pages: readonly { documentId: number; sourcePageNumber: number; rotationDegrees: number }[],
-  documents: ReadonlyMap<number, Buffer>
+  pages: readonly { documentId: number; sourcePageNumber: number; rotationDegrees: number; deskewDegrees?: number }[],
+  documents: ReadonlyMap<number, Buffer>,
+  documentName?: string
 ): Promise<Buffer> => {
   if (pages.length < 1 || pages.length > MAX_PAGES) throw new Error('Invalid merged page count')
   const output = await PDFDocument.create()
@@ -106,10 +126,34 @@ export const mergePages = async (
       throw new Error('Invalid source page number')
     }
     const [copied] = await output.copyPages(source, [page.sourcePageNumber - 1])
+    applyDeskew(copied, page.deskewDegrees ?? 0)
     applyRotation(copied, page.rotationDegrees)
     output.addPage(copied)
   }
+  if (documentName) await drawDocumentName(output, documentName)
   const result = Buffer.from(await output.save())
   if (result.length > MAX_PDF_BYTES) throw new Error('Merged PDF exceeds the size limit')
   return result
+}
+
+const drawDocumentName = async (pdf: PDFDocument, name: string) => {
+  const page = pdf.getPage(0)
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const size = 10
+  const width = font.widthOfTextAtSize(name, size)
+  const box = page.getCropBox()
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360
+  const margin = 18
+  const positions: Record<number, { x: number; y: number }> = {
+    0: { x: box.x + box.width - margin - width, y: box.y + box.height - margin - size },
+    90: { x: box.x + box.width - margin - size, y: box.y + margin + width },
+    180: { x: box.x + margin + width, y: box.y + margin + size },
+    270: { x: box.x + margin + size, y: box.y + box.height - margin - width }
+  }
+  page.drawText(name, { ...positions[rotation], size, font, color: rgb(0, 0, 0), rotate: degrees(rotation) })
+}
+export const stampDocumentName = async (bytes: Buffer, name: string): Promise<Buffer> => {
+  const pdf = await PDFDocument.load(bytes)
+  await drawDocumentName(pdf, name)
+  return Buffer.from(await pdf.save())
 }
