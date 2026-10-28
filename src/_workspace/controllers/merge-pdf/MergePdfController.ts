@@ -56,6 +56,12 @@ const safe =
       else await withAuditActor(req.body?.UPDATE_BY, () => handler(req, res))
     } catch (error: unknown) {
       const status = error instanceof MergePdfError || error instanceof AuditActorError ? error.statusCode : error instanceof z.ZodError ? 400 : 500
+      if (status >= 500) {
+        console.error(`Merge PDF ${method} failed`, {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          code: error && typeof error === 'object' && 'code' in error ? error.code : undefined,
+        })
+      }
       res.status(status).json({
         Status: false,
         Message: error instanceof MergePdfError || error instanceof AuditActorError || error instanceof z.ZodError ? error.message : 'Merge PDF operation failed',
