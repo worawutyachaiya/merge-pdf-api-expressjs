@@ -1,0 +1,2 @@
+-- Run once on an existing Merge PDF database before deploying this API.
+ALTER TABLE MERGE_PDF_JOB ADD COLUMN STAMP_POSITION VARCHAR(16) NOT NULL DEFAULT 'TOP_RIGHT' AFTER JOB_TITLE;

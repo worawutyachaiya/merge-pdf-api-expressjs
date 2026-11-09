@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
 import { normalizeFile } from './PdfEngine'
 import { detectEntryStatus04 } from './EntryStatusDetection'
+import { pageAnnotationsSchema, validatePageAnnotations } from './PageAnnotations'
 
 const identifier = z
   .number()
@@ -19,6 +20,7 @@ const description = z
   .transform((value) => value || null)
 export const editorChangesSchema = z
   .object({
+    stampCoordinates: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), fontSize: z.number().min(6).max(48).optional() }).optional(),
     pages: z
       .array(
         z.object({
@@ -31,6 +33,7 @@ export const editorChangesSchema = z
           CLASSIFICATION_SOURCE: z.enum(['AUTO_TEXT', 'AUTO_OCR', 'FILENAME', 'UNKNOWN', 'USER']).nullable(),
           CLASSIFICATION_CONFIDENCE: z.number().min(0).max(1).nullable(),
           DESCRIPTION: description,
+          EDITOR_ANNOTATIONS: pageAnnotationsSchema.nullable().optional().transform(value => value === null ? [] : value),
         })
       )
       .max(500),
@@ -78,6 +81,8 @@ export const prepareEditorUploads = async (files: Express.Multer.File[]) =>
   )
 
 export const applyEditorChanges = async (conn: PoolConnection, jobId: number, changes: PreparedEditorChanges): Promise<void> => {
+  await validatePageAnnotations(changes.pages)
+  if (changes.stampCoordinates) await repo.updateStampCoordinates(conn, jobId, changes.stampCoordinates)
   const existingDocuments = await repo.getDocuments(jobId, conn)
   const originalPages = await repo.getPages(jobId, conn)
   if (
@@ -132,7 +137,8 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
       original.CLASSIFICATION_CONFIDENCE !== page.CLASSIFICATION_CONFIDENCE ||
       original.ROTATION_DEGREES !== page.ROTATION_DEGREES ||
       original.DESKEW_DEGREES !== page.DESKEW_DEGREES ||
-      original.DESCRIPTION !== page.DESCRIPTION
+      original.DESCRIPTION !== page.DESCRIPTION ||
+      (page.EDITOR_ANNOTATIONS !== undefined && JSON.stringify(original.EDITOR_ANNOTATIONS ?? []) !== JSON.stringify(page.EDITOR_ANNOTATIONS))
     ) {
       await repo.updatePageDetails(conn, jobId, pageId, {
         CATEGORY_ID: page.CATEGORY_ID,
@@ -141,6 +147,7 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
         ROTATION_DEGREES: page.ROTATION_DEGREES,
         DESKEW_DEGREES: page.DESKEW_DEGREES,
         DESCRIPTION: page.DESCRIPTION,
+        ...(page.EDITOR_ANNOTATIONS !== undefined ? { EDITOR_ANNOTATIONS: page.EDITOR_ANNOTATIONS } : {}),
       })
     }
   }

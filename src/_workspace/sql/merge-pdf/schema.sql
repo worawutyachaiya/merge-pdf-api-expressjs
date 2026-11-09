@@ -3,7 +3,7 @@
 -- Complete Merge PDF schema. Missing tables/seeds are created; existing definitions and data are preserved.
 -- MySQL 8.0.16+; configure max_allowed_packet >= 64 MiB on the server.
 -- Targets the same database as the current environment files; change CREATE DATABASE and USE for another database.
--- This file creates all Merge PDF tables and category/settings seed data; no migrations are needed.
+-- This file creates fresh tables and category/settings seed data. Existing databases require the migrations listed in STORAGE.md.
 
 CREATE DATABASE IF NOT EXISTS _sit_merge_pdf_worawut_2026_09_30 CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 USE _sit_merge_pdf_worawut_2026_09_30;
@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS MERGE_PDF_JOB (
   JOB_CODE CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   JOB_REFERENCE VARCHAR(100) NULL,
   JOB_TITLE VARCHAR(255) NOT NULL,
+  STAMP_X DOUBLE NOT NULL DEFAULT 1,
+  STAMP_Y DOUBLE NOT NULL DEFAULT 0,
+  STAMP_FONT_SIZE DOUBLE NOT NULL DEFAULT 10,
   STATUS VARCHAR(12) NOT NULL DEFAULT 'DRAFT',
   ROW_VERSION INT UNSIGNED NOT NULL DEFAULT 1,
   REVISION_NO INT UNSIGNED NOT NULL DEFAULT 1,
@@ -139,6 +142,7 @@ CREATE TABLE IF NOT EXISTS MERGE_PDF_PAGE (
   CATEGORY_ID TINYINT UNSIGNED NULL,
   CLASSIFICATION_SOURCE VARCHAR(16) NULL,
   CLASSIFICATION_CONFIDENCE DECIMAL(4,3) NULL,
+  EDITOR_ANNOTATIONS JSON NULL,
   DESCRIPTION VARCHAR(1000) NULL,
   SOURCE_PAGE_NUMBER INT UNSIGNED NOT NULL,
   ROTATION_DEGREES SMALLINT UNSIGNED NOT NULL DEFAULT 0,

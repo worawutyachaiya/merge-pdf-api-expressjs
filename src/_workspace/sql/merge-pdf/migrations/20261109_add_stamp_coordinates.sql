@@ -1,0 +1,4 @@
+-- Run once. NULL coordinates preserve the previously selected stamp position.
+ALTER TABLE MERGE_PDF_JOB
+  ADD COLUMN STAMP_X DOUBLE NULL AFTER STAMP_POSITION,
+  ADD COLUMN STAMP_Y DOUBLE NULL AFTER STAMP_X;

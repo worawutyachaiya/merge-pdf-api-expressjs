@@ -1,7 +1,9 @@
 import path from 'node:path'
 
-import { PDFDocument, degrees, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix } from 'pdf-lib'
+import { PDFDocument, degrees, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix, type PDFPage, type PDFImage } from 'pdf-lib'
 import sharp from 'sharp'
+import type { StampCoordinates } from './StampCoordinates'
+import type { PageAnnotation } from './PageAnnotations'
 
 import type { SourceType } from '@src/_workspace/types/merge-pdf/MergePdf'
 import { convertExcelToPdf } from './ExcelPdf'
@@ -84,13 +86,15 @@ const applyDeskew = (page: import('pdf-lib').PDFPage, angle: number): void => {
   if (!Number.isFinite(angle) || Math.abs(angle) > 15) throw new Error('Invalid deskew angle')
   if (!angle) return
   const { x, y, width, height } = page.getCropBox()
-  const cx = x + width / 2, cy = y + height / 2
-  const radians = angle * Math.PI / 180
-  const cos = Math.cos(radians), sin = Math.sin(radians)
+  const cx = x + width / 2,
+    cy = y + height / 2
+  const radians = (angle * Math.PI) / 180
+  const cos = Math.cos(radians),
+    sin = Math.sin(radians)
   page.node.normalize()
-  const start = page.doc.context.register(page.doc.context.contentStream([
-    pushGraphicsState(), concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
-  ]))
+  const start = page.doc.context.register(
+    page.doc.context.contentStream([pushGraphicsState(), concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)])
+  )
   const end = page.doc.context.register(page.doc.context.contentStream([popGraphicsState()]))
   page.node.wrapContentStreams(start, end)
 }
@@ -107,13 +111,15 @@ export const extractPage = async (bytes: Buffer, sourcePageNumber: number, rotat
 }
 
 export const mergePages = async (
-  pages: readonly { documentId: number; sourcePageNumber: number; rotationDegrees: number; deskewDegrees?: number }[],
+  pages: readonly { documentId: number; sourcePageNumber: number; rotationDegrees: number; deskewDegrees?: number; annotations?: readonly PageAnnotation[] }[],
   documents: ReadonlyMap<number, Buffer>,
-  documentName?: string
+  documentName?: string,
+  stampCoordinates: StampCoordinates = { x: 1, y: 0 }
 ): Promise<Buffer> => {
   if (pages.length < 1 || pages.length > MAX_PAGES) throw new Error('Invalid merged page count')
   const output = await PDFDocument.create()
   const loaded = new Map<number, PDFDocument>()
+  const images = new Map<string, PDFImage>()
   for (const page of pages) {
     let source = loaded.get(page.documentId)
     if (!source) {
@@ -129,31 +135,69 @@ export const mergePages = async (
     applyDeskew(copied, page.deskewDegrees ?? 0)
     applyRotation(copied, page.rotationDegrees)
     output.addPage(copied)
+    await drawEStamps(output, copied, page.annotations ?? [], images)
   }
-  if (documentName) await drawDocumentName(output, documentName)
+  if (documentName) await drawDocumentName(output, documentName, stampCoordinates)
   const result = Buffer.from(await output.save())
   if (result.length > MAX_PDF_BYTES) throw new Error('Merged PDF exceeds the size limit')
   return result
 }
 
-const drawDocumentName = async (pdf: PDFDocument, name: string) => {
+// Remarks are editor metadata only; never turn them into PDF annotations or text.
+const drawEStamps = async (pdf: PDFDocument, page: PDFPage, annotations: readonly PageAnnotation[], images: Map<string, PDFImage>) => {
+  const box = page.getCropBox()
+  const rotation = ((page.getRotation().angle % 360) + 360) % 360
+  const visualWidth = rotation === 90 || rotation === 270 ? box.height : box.width
+  const visualHeight = rotation === 90 || rotation === 270 ? box.width : box.height
+  for (const item of annotations) {
+    if (item.kind !== 'estamp') continue
+    let image = images.get(item.image)
+    if (!image) {
+      const bytes = Buffer.from(item.image.slice(item.image.indexOf(',') + 1), 'base64')
+      image = item.image.startsWith('data:image/png;') ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes)
+      images.set(item.image, image)
+    }
+    // Match object-fit: contain in the editor, including the page's intrinsic rotation.
+    const boundsWidth = item.width * visualWidth, boundsHeight = item.height * visualHeight
+    const fit = Math.min(boundsWidth / image.width, boundsHeight / image.height)
+    const width = image.width * fit, height = image.height * fit
+    const vx = item.x * visualWidth + (boundsWidth - width) / 2
+    const vy = visualHeight - item.y * visualHeight - (boundsHeight + height) / 2
+    const positions: Record<number, { x: number; y: number }> = {
+      0: { x: box.x + vx, y: box.y + vy },
+      90: { x: box.x + box.width - vy, y: box.y + vx },
+      180: { x: box.x + box.width - vx, y: box.y + box.height - vy },
+      270: { x: box.x + vy, y: box.y + box.height - vx },
+    }
+    page.drawImage(image, { ...positions[rotation], width, height, rotate: degrees(rotation) })
+  }
+}
+
+const drawDocumentName = async (pdf: PDFDocument, name: string, position: StampCoordinates = { x: 1, y: 0 }) => {
   const page = pdf.getPage(0)
   const font = await pdf.embedFont(StandardFonts.Helvetica)
-  const size = 10
+  const size = position.fontSize ?? 10
+  if (!Number.isFinite(size) || size < 6 || size > 48) throw new Error('Stamp size must be between 6 and 48 pt')
   const width = font.widthOfTextAtSize(name, size)
   const box = page.getCropBox()
   const rotation = ((page.getRotation().angle % 360) + 360) % 360
   const margin = 18
+  const visualWidth = rotation === 90 || rotation === 270 ? box.height : box.width
+  const visualHeight = rotation === 90 || rotation === 270 ? box.width : box.height
+  const { x, y } = position
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) throw new Error('Invalid stamp coordinates')
+  const vx = margin + x * Math.max(0, visualWidth - 2 * margin - width)
+  const vy = visualHeight - margin - size - y * Math.max(0, visualHeight - 2 * margin - size)
   const positions: Record<number, { x: number; y: number }> = {
-    0: { x: box.x + box.width - margin - width, y: box.y + box.height - margin - size },
-    90: { x: box.x + box.width - margin - size, y: box.y + margin + width },
-    180: { x: box.x + margin + width, y: box.y + margin + size },
-    270: { x: box.x + margin + size, y: box.y + box.height - margin - width }
+    0: { x: box.x + vx, y: box.y + vy },
+    90: { x: box.x + box.width - vy, y: box.y + vx },
+    180: { x: box.x + box.width - vx, y: box.y + box.height - vy },
+    270: { x: box.x + vy, y: box.y + box.height - vx },
   }
   page.drawText(name, { ...positions[rotation], size, font, color: rgb(0, 0, 0), rotate: degrees(rotation) })
 }
-export const stampDocumentName = async (bytes: Buffer, name: string): Promise<Buffer> => {
+export const stampDocumentName = async (bytes: Buffer, name: string, position: StampCoordinates = { x: 1, y: 0 }): Promise<Buffer> => {
   const pdf = await PDFDocument.load(bytes)
-  await drawDocumentName(pdf, name)
+  await drawDocumentName(pdf, name, position)
   return Buffer.from(await pdf.save())
 }

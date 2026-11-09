@@ -6,7 +6,7 @@ const router = Router()
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 20 * 1024 * 1024 } })
 
-const editorUpload = multer({ storage: multer.memoryStorage(), limits: { files: 20, fileSize: 20 * 1024 * 1024 } })
+const editorUpload = multer({ storage: multer.memoryStorage(), limits: { files: 20, fileSize: 20 * 1024 * 1024, fieldSize: 20 * 1024 * 1024, fields: 1 } })
 
 const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
   upload.single('file')(req, res, (error) => {
@@ -43,44 +43,46 @@ router.post('/jobs/search', MergePdfController.search)
 
 router.post('/jobs/create', MergePdfController.create)
 
-router.get('/jobs/next-code', MergePdfController.nextCode)
+router.post('/jobs/next-code', MergePdfController.nextCode)
 
-router.patch('/jobs/:jobId/pages/batch', MergePdfController.batchPages)
+router.post('/jobs/:jobId/pages/batch', MergePdfController.batchPages)
 
-router.get('/jobs/:jobId/detail', MergePdfController.detail)
+router.post('/jobs/:jobId/detail', MergePdfController.detail)
 
-router.patch('/jobs/:jobId/save-draft', MergePdfController.saveDraft)
+router.post('/jobs/:jobId/save-draft', MergePdfController.saveDraft)
 
-router.delete('/jobs/:jobId/delete-draft', MergePdfController.deleteDraft)
+router.post('/jobs/:jobId/delete-draft', MergePdfController.deleteDraft)
 
-router.delete('/jobs/:jobId/delete', MergePdfController.deleteJob)
+router.post('/jobs/:jobId/delete', MergePdfController.deleteJob)
+router.post('/jobs/:jobId/restore', MergePdfController.restoreJob)
+router.post('/jobs/:jobId/categories/:categoryId/pdf', MergePdfController.previewCategory)
 
-router.get('/jobs/:jobId/documents/:documentId/source', MergePdfController.downloadSource)
+router.post('/jobs/:jobId/documents/:documentId/source', MergePdfController.downloadSource)
 
 router.post('/jobs/:jobId/documents', receiveFile, MergePdfController.uploadDocument)
 
 router.post('/jobs/:jobId/combined-documents', receiveFile, MergePdfController.uploadCombinedDocument)
 
-router.patch('/jobs/:jobId/pages/:pageId/category', MergePdfController.updatePageCategory)
+router.post('/jobs/:jobId/pages/:pageId/category', MergePdfController.updatePageCategory)
 
-router.patch('/jobs/:jobId/pages/:pageId/rotation', MergePdfController.rotatePage)
+router.post('/jobs/:jobId/pages/:pageId/rotation', MergePdfController.rotatePage)
 
-router.delete('/jobs/:jobId/pages/:pageId/remove', MergePdfController.removePage)
+router.post('/jobs/:jobId/pages/:pageId/remove', MergePdfController.removePage)
 
-router.delete('/jobs/:jobId/documents/:documentId/remove', MergePdfController.removeDocument)
+router.post('/jobs/:jobId/documents/:documentId/remove', MergePdfController.removeDocument)
 
-router.patch('/jobs/:jobId/documents/:documentId/status', MergePdfController.updateEntryStatus)
+router.post('/jobs/:jobId/documents/:documentId/status', MergePdfController.updateEntryStatus)
 
-router.patch('/jobs/:jobId/pages/reorder', MergePdfController.reorderPages)
+router.post('/jobs/:jobId/pages/reorder', MergePdfController.reorderPages)
 
 router.post('/jobs/:jobId/complete', MergePdfController.complete)
 
-router.get('/documents/:documentId/preview', MergePdfController.previewDocument)
+router.post('/documents/:documentId/preview', MergePdfController.previewDocument)
 
 router.post('/jobs/:jobId/pages/:pageId/preview', MergePdfController.previewPage)
 
 router.post('/jobs/:jobId/pages/:pageId/thumbnail', MergePdfController.thumbnail)
 
-router.get('/jobs/:jobId/publications/:publicationId/pdf', MergePdfController.downloadPublication)
+router.post('/jobs/:jobId/publications/:publicationId/pdf', MergePdfController.downloadPublication)
 
 export default router

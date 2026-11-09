@@ -1,4 +1,4 @@
-import { revisionSql } from '@src/_workspace/sql/merge-pdf/RecordRevisionSQL'
+import { RecordRevisionSQL, revisionSql } from '@src/_workspace/sql/merge-pdf/RecordRevisionSQL'
 import { MergePdfSQL } from '@src/_workspace/sql/merge-pdf/MergePdfSQL'
 import { getAuditEmployeeCode } from '@src/_workspace/services/merge-pdf/AuditActor'
 import { FileSequenceInactiveError } from '@src/_workspace/services/merge-pdf/ImportFileName'
@@ -90,9 +90,22 @@ export const MergePdfDataService = {
     titleFilter: string,
     updateByFilter: string,
     sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY',
-    sortDesc: boolean
+    sortDesc: boolean,
+    includingCancelled = false
   ): Promise<{ rows: JobRow[]; total: number }> => {
-    const params = [search, `%${search}%`, `%${search}%`, status, status, titleFilter, `%${titleFilter}%`, updateByFilter, `%${updateByFilter}%`]
+    const params = [
+      includingCancelled ? 1 : 0,
+      includingCancelled ? 1 : 0,
+      search,
+      `%${search}%`,
+      `%${search}%`,
+      status,
+      status,
+      titleFilter,
+      `%${titleFilter}%`,
+      updateByFilter,
+      `%${updateByFilter}%`,
+    ]
     const [rows, counts] = await Promise.all([
       MySQLExecute.queryParams<JobRow[]>(MergePdfSQL.listJobs(sortBy, sortDesc), [...params, pageSize, (page - 1) * pageSize]),
       MySQLExecute.queryParams<TotalRow[]>(MergePdfSQL.countJobs(), params),
@@ -203,6 +216,21 @@ export const MergePdfDataService = {
     )
   },
 
+  updateStampCoordinates: async (conn: PoolConnection, jobId: number, coordinates: { x: number; y: number; fontSize?: number }): Promise<void> => {
+    await replaceActiveRecords(
+      conn,
+      'MERGE_PDF_JOB',
+      MergePdfSQL.whereJob(),
+      [jobId],
+      {
+        STAMP_X: coordinates.x,
+        STAMP_Y: coordinates.y,
+        ...(coordinates.fontSize !== undefined ? { STAMP_FONT_SIZE: coordinates.fontSize } : {}),
+      },
+      getAuditEmployeeCode()
+    )
+  },
+
   bumpJob: async (conn: PoolConnection, jobId: number): Promise<void> => {
     await replaceActiveRecords(
       conn,
@@ -219,9 +247,33 @@ export const MergePdfDataService = {
   softDeleteJob: async (conn: PoolConnection, jobId: number, draftOnly = false): Promise<void> => {
     const [result] = await conn.query<ResultSetHeader>(MergePdfSQL.softDeleteJob(), [getAuditEmployeeCode(), jobId, draftOnly ? 1 : 0])
     if (result.affectedRows !== 1) throw new Error('Active document not found')
-    await conn.query<ResultSetHeader>(MergePdfSQL.softDeleteJobPages(), [getAuditEmployeeCode(), jobId])
-    await conn.query<ResultSetHeader>(MergePdfSQL.softDeleteJobDocuments(), [getAuditEmployeeCode(), jobId])
-    await conn.query<ResultSetHeader>(MergePdfSQL.softDeleteJobPublications(), [getAuditEmployeeCode(), jobId])
+  },
+
+  restoreJob: async (conn: PoolConnection, jobId: number, expectedVersion: number): Promise<void> => {
+    const [jobs] = await conn.query<(RowDataPacket & { ROW_VERSION: number; INUSE: number; IS_CURRENT: number; UPDATE_DATE: Date; UPDATE_BY: string })[]>(
+      'SELECT * FROM MERGE_PDF_JOB WHERE JOB_ID = ? ORDER BY REVISION_NO DESC LIMIT 1 FOR UPDATE',
+      [jobId]
+    )
+    const job = jobs[0]
+    if (!job || job.INUSE !== 0 || job.ROW_VERSION !== expectedVersion) throw new Error('Cancelled document changed. Reload and try again')
+    const actor = getAuditEmployeeCode()
+    // Earlier releases also cancelled active child rows. Recover only that delete
+    // operation's snapshot, leaving pages removed before cancellation untouched.
+    if (job.IS_CURRENT === 0) {
+      for (const table of ['MERGE_PDF_DOCUMENT', 'MERGE_PDF_PAGE', 'MERGE_PDF_PUBLICATION'] as const) {
+        const [rows] = await conn.query<RowDataPacket[]>(
+          `SELECT * FROM ${table} WHERE JOB_ID = ? AND INUSE = 0 AND IS_CURRENT = 0 AND UPDATE_DATE >= ? AND UPDATE_BY = ? FOR UPDATE`,
+          [jobId, job.UPDATE_DATE, job.UPDATE_BY]
+        )
+        if (rows.length) {
+          const replacement = RecordRevisionSQL.insertReplacement(table, rows, {}, actor)
+          await conn.query(replacement.sql, replacement.params)
+        }
+      }
+    }
+    await conn.query('UPDATE MERGE_PDF_JOB SET IS_CURRENT = 0 WHERE JOB_ID = ? AND REVISION_NO = ?', [jobId, job.REVISION_NO])
+    const replacement = RecordRevisionSQL.insertReplacement('MERGE_PDF_JOB', [job], { ROW_VERSION: job.ROW_VERSION + 1 }, actor)
+    await conn.query(replacement.sql, replacement.params)
   },
 
   insertDocument: async (
@@ -321,14 +373,24 @@ export const MergePdfDataService = {
     conn: PoolConnection,
     jobId: number,
     pageId: number,
-    changes: { CATEGORY_ID: number; CLASSIFICATION_SOURCE: string | null; CLASSIFICATION_CONFIDENCE: number | null; ROTATION_DEGREES: number; DESKEW_DEGREES: number; DESCRIPTION: string | null }
+    changes: {
+      CATEGORY_ID: number
+      CLASSIFICATION_SOURCE: string | null
+      CLASSIFICATION_CONFIDENCE: number | null
+      ROTATION_DEGREES: number
+      DESKEW_DEGREES: number
+      EDITOR_ANNOTATIONS?: PageSummary['EDITOR_ANNOTATIONS']
+      DESCRIPTION: string | null
+    }
   ): Promise<void> => {
     await replaceActiveRecords(
       conn,
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
-      { ...changes, DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null },
+      { ...changes, DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null,
+        ...(changes.EDITOR_ANNOTATIONS !== undefined ? { EDITOR_ANNOTATIONS: JSON.stringify(changes.EDITOR_ANNOTATIONS ?? []) } : {}),
+      },
       getAuditEmployeeCode()
     )
   },

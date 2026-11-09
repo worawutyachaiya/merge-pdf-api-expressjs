@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstat, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { getOutputDirectory } from './PublicationStorage'
+import { getOutputDirectory, publicationDirectory } from './PublicationStorage'
 
 export interface DeletionFile {
   OUTPUT_FILE_NAME: string
@@ -16,7 +16,7 @@ export const removePublishedPdfs = async (files: DeletionFile[]): Promise<() => 
   const unique = new Map<string, DeletionFile>()
   for (const file of files) {
     if (!file.NETWORK_PATH) continue
-    const target = path.resolve(file.NETWORK_PATH)
+    const target = path.resolve(publicationDirectory(file.NETWORK_PATH), path.win32.basename(file.NETWORK_PATH))
     if (path.dirname(target) !== directory || path.basename(target) !== file.OUTPUT_FILE_NAME || path.extname(target).toLowerCase() !== '.pdf') {
       throw new Error('The saved PDF path is outside the configured output folder. Contact your administrator.')
     }

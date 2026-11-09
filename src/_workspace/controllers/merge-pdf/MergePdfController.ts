@@ -46,6 +46,7 @@ const readOnlyMethods = new Set([
   'Thumbnail Merge PDF page',
   'Download merged PDF',
   'Download source document',
+  'Preview document category',
 ])
 
 const safe =
@@ -148,6 +149,7 @@ export const MergePdfController = {
         updateByFilter: z.string().max(100).default(''),
         sortBy: z.enum(['JOB_TITLE', 'STATUS', 'DOCUMENT_COUNT', 'PAGE_COUNT', 'UPDATE_DATE', 'UPDATE_BY']).default('UPDATE_DATE'),
         sortDesc: z.boolean().default(true),
+        includingCancelled: z.boolean().default(false),
       })
       .parse(req.body)
     const result = await MergePdfService.list(
@@ -158,7 +160,8 @@ export const MergePdfController = {
       filters.titleFilter.trim(),
       filters.updateByFilter.trim(),
       filters.sortBy,
-      filters.sortDesc
+      filters.sortDesc,
+      filters.includingCancelled
     )
     respond(res, result.rows, 'List Merge PDF jobs', 200, result.total)
   }),
@@ -167,7 +170,11 @@ export const MergePdfController = {
     respond(res, await MergePdfService.create(fields.title, fields.reference, fields.month), 'Create Merge PDF job', 201)
   }),
   nextCode: safe('Preview next document code', async (req, res) => {
-    const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional().parse(req.query.month)
+    const month = z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+      .optional()
+      .parse(req.body?.month)
     respond(res, { code: await MergePdfService.nextCode(month) }, 'Preview next document code')
   }),
   batchPages: safe('Update selected pages', async (req, res) => {
@@ -188,6 +195,16 @@ export const MergePdfController = {
   deleteJob: safe('Delete Merge PDF job', async (req, res) => {
     const fields = versionFields.parse(req.body)
     respond(res, await MergePdfService.deleteJob(id.parse(req.params.jobId), fields.rowVersion), 'Delete Merge PDF job')
+  }),
+  restoreJob: safe('Restore Merge PDF job', async (req, res) => {
+    const fields = versionFields.parse(req.body)
+    respond(res, await MergePdfService.restoreJob(id.parse(req.params.jobId), fields.rowVersion), 'Restore Merge PDF job')
+  }),
+  previewCategory: safe('Preview document category', async (req, res) => {
+    const categoryId = z.coerce.number().int().min(1).max(10).parse(req.params.categoryId)
+    const bytes = await MergePdfService.categoryPdf(id.parse(req.params.jobId), categoryId)
+    res.type('pdf').setHeader('Content-Disposition', 'inline; filename="document.pdf"')
+    res.send(bytes)
   }),
   downloadSource: safe('Download source document', async (req, res) => {
     const file = await MergePdfService.originalDocument(id.parse(req.params.jobId), id.parse(req.params.documentId))
@@ -264,7 +281,12 @@ export const MergePdfController = {
     res.send(bytes)
   }),
   previewPage: safe('Preview Merge PDF page', async (req, res) => {
-    const bytes = await MergePdfService.pagePdf(id.parse(req.params.jobId), id.parse(req.params.pageId), previewRotation.parse(req.body?.rotation), z.number().min(-15).max(15).optional().parse(req.body?.deskew))
+    const bytes = await MergePdfService.pagePdf(
+      id.parse(req.params.jobId),
+      id.parse(req.params.pageId),
+      previewRotation.parse(req.body?.rotation),
+      z.number().min(-15).max(15).optional().parse(req.body?.deskew)
+    )
     if (!bytes) throw new MergePdfError('Page not found', 404)
     res.type('pdf').setHeader('Content-Disposition', 'inline; filename="page.pdf"')
     res.setHeader('Cache-Control', 'private, max-age=300')
