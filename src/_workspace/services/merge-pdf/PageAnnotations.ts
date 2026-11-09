@@ -10,7 +10,11 @@ const placement = {
 }
 
 export const pageAnnotationsSchema = z.array(z.discriminatedUnion('kind', [
-  z.object({ ...placement, kind: z.literal('remark'), text: z.string().max(2000) }),
+  z.object({
+    ...placement, kind: z.literal('remark'), text: z.string().max(2000),
+    fontSize: z.number().min(6).max(72).optional(),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  }),
   z.object({
     ...placement, kind: z.literal('estamp'),
     image: z.string().max(2_800_000).regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/),

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { MergePdfError, MergePdfService } from '@src/_workspace/services/merge-pdf/MergePdfService'
 import { getPageThumbnail, renderPdfThumbnails } from '@src/_workspace/services/merge-pdf/PageThumbnail'
 import { normalizeFile, extractPage } from '@src/_workspace/services/merge-pdf/PdfEngine'
+import { prepareTiffEStamp } from '@src/_workspace/services/merge-pdf/EStampImage'
 import { classifyCombinedPdf } from '@src/_workspace/services/merge-pdf/CombinedPdfClassification'
 import { detectDocumentType } from '@src/_workspace/services/merge-pdf/DocumentTypeDetection'
 import { detectEntryStatus04 } from '@src/_workspace/services/merge-pdf/EntryStatusDetection'
@@ -74,6 +75,10 @@ const safe =
   }
 
 export const MergePdfController = {
+  prepareEStampImage: safe('Prepare E-stamp image', async (req, res) => {
+    if (!req.file) throw new Error('Select a TIFF image')
+    respond(res, await prepareTiffEStamp(req.file.originalname, req.file.buffer), 'Prepare E-stamp image')
+  }),
   detectDocumentType: async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ Status: false, Message: 'Select a file', ResultOnDb: [] })
