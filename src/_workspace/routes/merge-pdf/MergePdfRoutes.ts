@@ -6,7 +6,10 @@ const router = Router()
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 20 * 1024 * 1024 } })
 
-const editorUpload = multer({ storage: multer.memoryStorage(), limits: { files: 20, fileSize: 20 * 1024 * 1024, fieldSize: 20 * 1024 * 1024, fields: 1 } })
+const editorUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 20, fileSize: 20 * 1024 * 1024, fieldSize: 20 * 1024 * 1024, fields: 3 },
+})
 
 const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
   upload.single('file')(req, res, (error) => {
