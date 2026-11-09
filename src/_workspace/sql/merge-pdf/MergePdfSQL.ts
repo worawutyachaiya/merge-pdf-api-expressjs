@@ -39,12 +39,43 @@ export const MergePdfSQL = {
       AND (? = '' OR J.JOB_TITLE LIKE ? OR J.JOB_CODE LIKE ?)
       AND (? = 'ALL' OR J.STATUS = ?)
       AND (? = '' OR (CASE WHEN J.JOB_CODE REGEXP '^I[0-9]{2}-[0-9]{4,}$' THEN J.JOB_CODE ELSE J.JOB_TITLE END) LIKE ?)
-      AND (? = '' OR J.UPDATE_BY LIKE ?)`,
+      AND (? = '' OR J.UPDATE_BY LIKE ?)
+      AND (? = '' OR J.CREATE_BY LIKE ?)
+      AND (? IS NULL OR J.CREATE_DATE >= ?)
+      AND (? IS NULL OR J.CREATE_DATE <= ?)
+      AND (? = '' OR J.UPDATE_BY LIKE ?)
+      AND (? IS NULL OR J.UPDATE_DATE >= ?)
+      AND (? IS NULL OR J.UPDATE_DATE <= ?)`,
   listJobsOrderBy: (sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY', sortDesc: boolean): string =>
     `${sortColumns[sortBy]} ${sortDesc ? 'DESC' : 'ASC'}, J.JOB_ID DESC`,
   listJobs: (sortBy: keyof typeof sortColumns, sortDesc: boolean): string =>
     `${jobSelect} ${MergePdfSQL.listJobsWhere()} ORDER BY ${MergePdfSQL.listJobsOrderBy(sortBy, sortDesc)} LIMIT ? OFFSET ?`,
   countJobs: (): string => `SELECT COUNT(*) AS TOTAL FROM MERGE_PDF_JOB J ${MergePdfSQL.listJobsWhere()}`,
+  dashboardStats: (): string => `SELECT
+      COALESCE(SUM(CASE WHEN J.STATUS = 'DRAFT' THEN 1 ELSE 0 END), 0) AS DRAFT_COUNT,
+      COALESCE(SUM(CASE WHEN J.STATUS = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS COMPLETED_COUNT
+      FROM MERGE_PDF_JOB J
+      WHERE J.IS_CURRENT = 1 AND J.INUSE = 1 AND J.STATUS IN ('DRAFT', 'COMPLETED')
+        AND (? = '' OR J.CREATE_BY LIKE ?)
+        AND (? IS NULL OR J.CREATE_DATE >= ?)
+        AND (? IS NULL OR J.CREATE_DATE <= ?)
+        AND (? = '' OR J.UPDATE_BY LIKE ?)
+        AND (? IS NULL OR J.UPDATE_DATE >= ?)
+        AND (? IS NULL OR J.UPDATE_DATE <= ?)`,
+  dashboardStatusJobs: (): string => `SELECT J.JOB_ID, J.JOB_CODE,
+      CASE WHEN J.JOB_CODE REGEXP '^I[0-9]{2}-[0-9]{4,}$' THEN J.JOB_CODE ELSE J.JOB_TITLE END AS JOB_TITLE,
+      J.STATUS, J.CREATE_DATE,
+      (SELECT COUNT(*) FROM MERGE_PDF_DOCUMENT D
+        WHERE D.JOB_ID = J.JOB_ID AND D.INUSE = 1 AND D.IS_CURRENT = 1) AS DOCUMENT_COUNT
+      FROM MERGE_PDF_JOB J
+      WHERE J.IS_CURRENT = 1 AND J.INUSE = 1 AND J.STATUS = ?
+        AND (? = '' OR J.CREATE_BY LIKE ?)
+        AND (? IS NULL OR J.CREATE_DATE >= ?)
+        AND (? IS NULL OR J.CREATE_DATE <= ?)
+        AND (? = '' OR J.UPDATE_BY LIKE ?)
+        AND (? IS NULL OR J.UPDATE_DATE >= ?)
+        AND (? IS NULL OR J.UPDATE_DATE <= ?)
+      ORDER BY J.CREATE_DATE DESC, J.JOB_ID DESC`,
   getJob: (): string => `${jobSelect} WHERE J.JOB_ID = ? AND J.INUSE = 1 AND J.IS_CURRENT = 1`,
   lockJob: (): string => `${jobSelect} WHERE J.JOB_ID = ? AND J.INUSE = 1 AND J.IS_CURRENT = 1 FOR UPDATE`,
   getDocuments: (): string => `SELECT D.DOCUMENT_ID, D.JOB_ID, D.CATEGORY_ID, C.CATEGORY_NAME,

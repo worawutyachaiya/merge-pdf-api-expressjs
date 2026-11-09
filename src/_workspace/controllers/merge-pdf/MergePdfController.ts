@@ -41,6 +41,8 @@ type Handler = (req: Request, res: Response) => Promise<void>
 const readOnlyMethods = new Set([
   'Preview next document code',
   'List Merge PDF jobs',
+  'Load Combination dashboard',
+  'Load Combination status documents',
   'View Merge PDF job',
   'Preview Merge PDF document',
   'Preview Merge PDF page',
@@ -49,6 +51,25 @@ const readOnlyMethods = new Set([
   'Download source document',
   'Preview document category',
 ])
+
+const dateTimeFilter = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value.replace(' ', 'T')}Z`)
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 19).replace('T', ' ') === value
+  }, 'Invalid date')
+  .nullable()
+  .default(null)
+
+const dateRangeFilters = z.object({
+  from: dateTimeFilter,
+  to: dateTimeFilter,
+  createdBy: z.string().max(100).default(''),
+  updatedFrom: dateTimeFilter,
+  updatedTo: dateTimeFilter,
+  updatedBy: z.string().max(100).default(''),
+})
 
 const safe =
   (method: string, handler: Handler) =>
@@ -152,9 +173,23 @@ export const MergePdfController = {
         pageSize: z.coerce.number().int().min(1).max(100).default(10),
         titleFilter: z.string().max(255).default(''),
         updateByFilter: z.string().max(100).default(''),
+        createdBy: z.string().max(100).default(''),
+        createDateFrom: dateTimeFilter,
+        createDateTo: dateTimeFilter,
+        updatedBy: z.string().max(100).default(''),
+        updateDateFrom: dateTimeFilter,
+        updateDateTo: dateTimeFilter,
         sortBy: z.enum(['JOB_TITLE', 'STATUS', 'DOCUMENT_COUNT', 'PAGE_COUNT', 'UPDATE_DATE', 'UPDATE_BY']).default('UPDATE_DATE'),
         sortDesc: z.boolean().default(true),
         includingCancelled: z.boolean().default(false),
+      })
+      .refine((filters) => !filters.createDateFrom || !filters.createDateTo || filters.createDateFrom <= filters.createDateTo, {
+        message: 'Start date must be on or before end date',
+        path: ['createDateTo'],
+      })
+      .refine((filters) => !filters.updateDateFrom || !filters.updateDateTo || filters.updateDateFrom <= filters.updateDateTo, {
+        message: 'Start date must be on or before end date',
+        path: ['updateDateTo'],
       })
       .parse(req.body)
     const result = await MergePdfService.list(
@@ -166,9 +201,58 @@ export const MergePdfController = {
       filters.updateByFilter.trim(),
       filters.sortBy,
       filters.sortDesc,
-      filters.includingCancelled
+      filters.includingCancelled,
+      filters.createdBy.trim(),
+      filters.createDateFrom,
+      filters.createDateTo,
+      filters.updatedBy.trim(),
+      filters.updateDateFrom,
+      filters.updateDateTo
     )
     respond(res, result.rows, 'List Merge PDF jobs', 200, result.total)
+  }),
+  dashboard: safe('Load Combination dashboard', async (req, res) => {
+    const { from, to, createdBy, updatedFrom, updatedTo, updatedBy } = dateRangeFilters
+      .superRefine((range, context) => {
+        if (range.from && range.to && range.from > range.to) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['to'],
+          })
+        }
+        if (range.updatedFrom && range.updatedTo && range.updatedFrom > range.updatedTo) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['updatedTo'],
+          })
+        }
+      })
+      .parse(req.body)
+    respond(res, await MergePdfService.dashboard(from, to, createdBy.trim(), updatedFrom, updatedTo, updatedBy.trim()), 'Load Combination dashboard')
+  }),
+  dashboardStatusJobs: safe('Load Combination status documents', async (req, res) => {
+    const { from, to, createdBy, updatedFrom, updatedTo, updatedBy, status } = dateRangeFilters
+      .extend({ status: z.enum(['DRAFT', 'COMPLETED']) })
+      .superRefine((range, context) => {
+        if (range.from && range.to && range.from > range.to) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['to'],
+          })
+        }
+        if (range.updatedFrom && range.updatedTo && range.updatedFrom > range.updatedTo) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['updatedTo'],
+          })
+        }
+      })
+      .parse(req.body)
+    respond(res, await MergePdfService.dashboardStatusJobs(from, to, createdBy.trim(), updatedFrom, updatedTo, updatedBy.trim(), status), 'Load Combination status documents')
   }),
   create: safe('Create Merge PDF job', async (req, res) => {
     const fields = jobFields.parse(req.body)

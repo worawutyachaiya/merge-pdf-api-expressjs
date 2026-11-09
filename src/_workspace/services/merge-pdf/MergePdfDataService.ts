@@ -6,7 +6,16 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/prom
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
 import { replaceActiveRecords } from '@src/_workspace/services/merge-pdf/RecordRevisionService'
-import type { DocumentStatusSummary, DocumentSummary, JobSummary, PageClassification, PageSummary, PublicationSummary } from '@src/_workspace/types/merge-pdf/MergePdf'
+import type {
+  DocumentStatusSummary,
+  DocumentSummary,
+  MergePdfDashboardJob,
+  JobSummary,
+  MergePdfDashboardSummary,
+  PageClassification,
+  PageSummary,
+  PublicationSummary,
+} from '@src/_workspace/types/merge-pdf/MergePdf'
 
 interface JobRow extends RowDataPacket, JobSummary {}
 interface DocumentRow extends RowDataPacket, DocumentSummary {}
@@ -49,6 +58,11 @@ interface FileSequenceRow extends CountRow {
 interface TotalRow extends RowDataPacket {
   TOTAL: number
 }
+interface DashboardStatsRow extends RowDataPacket {
+  DRAFT_COUNT: number
+  COMPLETED_COUNT: number
+}
+interface DashboardJobRow extends RowDataPacket, MergePdfDashboardJob {}
 interface CategoryIdRow extends RowDataPacket {
   CATEGORY_ID: number
 }
@@ -76,6 +90,57 @@ export const MergePdfDataService = {
     }
     return summaries
   },
+  getDashboardSummary: async (
+    from: string | null,
+    to: string | null,
+    createdBy: string,
+    updatedFrom: string | null,
+    updatedTo: string | null,
+    updatedBy: string
+  ): Promise<MergePdfDashboardSummary> => {
+    const [stats] = await MySQLExecute.queryParams<DashboardStatsRow[]>(MergePdfSQL.dashboardStats(), [
+      createdBy,
+      `%${createdBy}%`,
+      from,
+      from,
+      to,
+      to,
+      updatedBy,
+      `%${updatedBy}%`,
+      updatedFrom,
+      updatedFrom,
+      updatedTo,
+      updatedTo,
+    ])
+    return {
+      draftCount: Number(stats?.DRAFT_COUNT ?? 0),
+      completedCount: Number(stats?.COMPLETED_COUNT ?? 0),
+    }
+  },
+  getDashboardStatusJobs: async (
+    from: string | null,
+    to: string | null,
+    createdBy: string,
+    updatedFrom: string | null,
+    updatedTo: string | null,
+    updatedBy: string,
+    status: 'DRAFT' | 'COMPLETED'
+  ): Promise<MergePdfDashboardJob[]> =>
+    MySQLExecute.queryParams<DashboardJobRow[]>(MergePdfSQL.dashboardStatusJobs(), [
+      status,
+      createdBy,
+      `%${createdBy}%`,
+      from,
+      from,
+      to,
+      to,
+      updatedBy,
+      `%${updatedBy}%`,
+      updatedFrom,
+      updatedFrom,
+      updatedTo,
+      updatedTo,
+    ]),
 
   getRequiredCategoryIds: async (conn: PoolConnection): Promise<number[]> => {
     const [rows] = await conn.query<CategoryIdRow[]>(MergePdfSQL.getRequiredCategoryIds())
@@ -91,7 +156,13 @@ export const MergePdfDataService = {
     updateByFilter: string,
     sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY',
     sortDesc: boolean,
-    includingCancelled = false
+    includingCancelled = false,
+    createdBy = '',
+    createDateFrom: string | null = null,
+    createDateTo: string | null = null,
+    updatedBy = '',
+    updateDateFrom: string | null = null,
+    updateDateTo: string | null = null
   ): Promise<{ rows: JobRow[]; total: number }> => {
     const params = [
       includingCancelled ? 1 : 0,
@@ -105,6 +176,18 @@ export const MergePdfDataService = {
       `%${titleFilter}%`,
       updateByFilter,
       `%${updateByFilter}%`,
+      createdBy,
+      `%${createdBy}%`,
+      createDateFrom,
+      createDateFrom,
+      createDateTo,
+      createDateTo,
+      updatedBy,
+      `%${updatedBy}%`,
+      updateDateFrom,
+      updateDateFrom,
+      updateDateTo,
+      updateDateTo,
     ]
     const [rows, counts] = await Promise.all([
       MySQLExecute.queryParams<JobRow[]>(MergePdfSQL.listJobs(sortBy, sortDesc), [...params, pageSize, (page - 1) * pageSize]),
@@ -388,7 +471,9 @@ export const MergePdfDataService = {
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
-      { ...changes, DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null,
+      {
+        ...changes,
+        DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null,
         ...(changes.EDITOR_ANNOTATIONS !== undefined ? { EDITOR_ANNOTATIONS: JSON.stringify(changes.EDITOR_ANNOTATIONS ?? []) } : {}),
       },
       getAuditEmployeeCode()

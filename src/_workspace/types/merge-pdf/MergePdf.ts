@@ -35,6 +35,20 @@ export interface JobSummary {
   UNCLASSIFIED_PAGE_COUNT?: number
 }
 
+export interface MergePdfDashboardSummary {
+  draftCount: number
+  completedCount: number
+}
+
+export interface MergePdfDashboardJob {
+  JOB_ID: number
+  JOB_CODE: string
+  JOB_TITLE: string
+  STATUS: 'DRAFT' | 'COMPLETED'
+  CREATE_DATE: string
+  DOCUMENT_COUNT: number
+}
+
 export interface DocumentStatusSummary {
   DOCUMENT_PAGE_COUNTS: Record<string, number>
   UNCLASSIFIED_PAGE_COUNT: number

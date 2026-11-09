@@ -107,13 +107,17 @@ export const MergePdfService = {
       await MySQLExecute.withTransaction(async (conn) => {
         const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
         const previous = await repo.getLatestPublished(jobId, conn)
-        if (changes.stampCoordinates) changes = {
-          ...changes,
-          stampCoordinates: { ...changes.stampCoordinates, fontSize: changes.stampCoordinates.fontSize ?? job.STAMP_FONT_SIZE ?? 10 },
-        }
+        if (changes.stampCoordinates)
+          changes = {
+            ...changes,
+            stampCoordinates: { ...changes.stampCoordinates, fontSize: changes.stampCoordinates.fontSize ?? job.STAMP_FONT_SIZE ?? 10 },
+          }
         if (job.LAST_COMPLETED_AT || job.STATUS === 'COMPLETED' || previous) {
           const saved = jobStampCoordinates(job)
-          if (changes.stampCoordinates && (changes.stampCoordinates.x !== saved.x || changes.stampCoordinates.y !== saved.y || changes.stampCoordinates.fontSize !== saved.fontSize))
+          if (
+            changes.stampCoordinates &&
+            (changes.stampCoordinates.x !== saved.x || changes.stampCoordinates.y !== saved.y || changes.stampCoordinates.fontSize !== saved.fontSize)
+          )
             throw new MergePdfError('Stamp position and size cannot be changed after Save & Complete', 409)
           // Keep published coordinates immutable, including requests from older clients.
           changes = { ...changes, stampCoordinates: undefined }
@@ -216,9 +220,31 @@ export const MergePdfService = {
     updateByFilter: string,
     sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY',
     sortDesc: boolean,
-    includingCancelled = false
+    includingCancelled = false,
+    createdBy = '',
+    createDateFrom: string | null = null,
+    createDateTo: string | null = null,
+    updatedBy = '',
+    updateDateFrom: string | null = null,
+    updateDateTo: string | null = null
   ) => {
-    const result = await repo.listJobs(search, status, page, pageSize, titleFilter, updateByFilter, sortBy, sortDesc, includingCancelled)
+    const result = await repo.listJobs(
+      search,
+      status,
+      page,
+      pageSize,
+      titleFilter,
+      updateByFilter,
+      sortBy,
+      sortDesc,
+      includingCancelled,
+      createdBy,
+      createDateFrom,
+      createDateTo,
+      updatedBy,
+      updateDateFrom,
+      updateDateTo
+    )
     const summaries = await repo.getDocumentStatuses(result.rows.map((job) => job.JOB_ID))
     return {
       ...result,
@@ -228,6 +254,17 @@ export const MergePdfService = {
       })),
     }
   },
+  dashboard: (from: string | null, to: string | null, createdBy: string, updatedFrom: string | null, updatedTo: string | null, updatedBy: string) =>
+    repo.getDashboardSummary(from, to, createdBy, updatedFrom, updatedTo, updatedBy),
+  dashboardStatusJobs: (
+    from: string | null,
+    to: string | null,
+    createdBy: string,
+    updatedFrom: string | null,
+    updatedTo: string | null,
+    updatedBy: string,
+    status: 'DRAFT' | 'COMPLETED'
+  ) => repo.getDashboardStatusJobs(from, to, createdBy, updatedFrom, updatedTo, updatedBy, status),
   detail,
 
   create: async (_title: string, reference: string | null, month?: string): Promise<JobDetail> => {
@@ -318,7 +355,7 @@ export const MergePdfService = {
         sourcePageNumber: page.SOURCE_PAGE_NUMBER,
         rotationDegrees: page.ROTATION_DEGREES,
         deskewDegrees: page.DESKEW_DEGREES,
-            annotations: page.EDITOR_ANNOTATIONS ?? [],
+        annotations: page.EDITOR_ANNOTATIONS ?? [],
       })),
       new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
     )
@@ -487,7 +524,7 @@ export const MergePdfService = {
               sourcePageNumber: page.SOURCE_PAGE_NUMBER,
               rotationDegrees: page.ROTATION_DEGREES,
               deskewDegrees: page.DESKEW_DEGREES,
-            annotations: page.EDITOR_ANNOTATIONS ?? [],
+              annotations: page.EDITOR_ANNOTATIONS ?? [],
             })),
             new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
           )

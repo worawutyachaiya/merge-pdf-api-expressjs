@@ -44,6 +44,8 @@ router.post(
 router.post('/jobs/:jobId/editor/:mode', editorUpload.array('files', 20), MergePdfController.saveEditor)
 
 router.post('/jobs/search', MergePdfController.search)
+router.post('/jobs/dashboard', MergePdfController.dashboard)
+router.post('/jobs/dashboard/status', MergePdfController.dashboardStatusJobs)
 
 router.post('/jobs/create', MergePdfController.create)
 
