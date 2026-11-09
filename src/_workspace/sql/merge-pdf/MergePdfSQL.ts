@@ -31,8 +31,14 @@ export const MergePdfSQL = {
        WHERE P.INUSE = 1 AND P.IS_CURRENT = 1 AND D.INUSE = 1 AND D.IS_CURRENT = 1 AND P.JOB_ID IN (${jobIds.map(() => '?').join(',')})
        GROUP BY P.JOB_ID, COALESCE(P.CATEGORY_ID, D.CATEGORY_ID)`,
   getRequiredCategoryIds: (): string => 'SELECT CATEGORY_ID FROM MERGE_PDF_CATEGORY WHERE INUSE = 1 AND IS_CURRENT = 1 AND REQUIRED_FOR_COMPLETE = 1 ORDER BY SORT_ORDER',
-  listJobsWhere: (): string => `WHERE (J.IS_CURRENT = 1 OR (? = 1 AND J.INUSE = 0 AND NOT EXISTS (SELECT 1 FROM MERGE_PDF_JOB newer WHERE newer.JOB_ID = J.JOB_ID AND newer.REVISION_NO > J.REVISION_NO))) AND (J.INUSE = 1 OR ? = 1) AND (? = '' OR J.JOB_TITLE LIKE ? OR J.JOB_CODE LIKE ?)
-      AND (? = 'ALL' OR J.STATUS = ?) AND (? = '' OR (CASE WHEN J.JOB_CODE REGEXP '^I[0-9]{2}-[0-9]{4,}$' THEN J.JOB_CODE ELSE J.JOB_TITLE END) LIKE ?)
+  listJobsWhere: (): string => `WHERE (J.IS_CURRENT = 1 OR (? = 1 AND J.INUSE = 0 AND NOT EXISTS (
+        SELECT 1 FROM MERGE_PDF_JOB newer
+        WHERE newer.JOB_ID = J.JOB_ID AND newer.REVISION_NO > J.REVISION_NO
+      )))
+      AND (J.INUSE = 1 OR ? = 1)
+      AND (? = '' OR J.JOB_TITLE LIKE ? OR J.JOB_CODE LIKE ?)
+      AND (? = 'ALL' OR J.STATUS = ?)
+      AND (? = '' OR (CASE WHEN J.JOB_CODE REGEXP '^I[0-9]{2}-[0-9]{4,}$' THEN J.JOB_CODE ELSE J.JOB_TITLE END) LIKE ?)
       AND (? = '' OR J.UPDATE_BY LIKE ?)`,
   listJobsOrderBy: (sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY', sortDesc: boolean): string =>
     `${sortColumns[sortBy]} ${sortDesc ? 'DESC' : 'ASC'}, J.JOB_ID DESC`,
