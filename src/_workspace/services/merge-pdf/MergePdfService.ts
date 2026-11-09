@@ -112,16 +112,6 @@ export const MergePdfService = {
             ...changes,
             stampCoordinates: { ...changes.stampCoordinates, fontSize: changes.stampCoordinates.fontSize ?? job.STAMP_FONT_SIZE ?? 10 },
           }
-        if (job.LAST_COMPLETED_AT || job.STATUS === 'COMPLETED' || previous) {
-          const saved = jobStampCoordinates(job)
-          if (
-            changes.stampCoordinates &&
-            (changes.stampCoordinates.x !== saved.x || changes.stampCoordinates.y !== saved.y || changes.stampCoordinates.fontSize !== saved.fontSize)
-          )
-            throw new MergePdfError('Stamp position and size cannot be changed after Save & Complete', 409)
-          // Keep published coordinates immutable, including requests from older clients.
-          changes = { ...changes, stampCoordinates: undefined }
-        }
         await applyEditorChanges(conn, jobId, changes)
         const pages = await repo.getPages(jobId, conn)
         const documents = await repo.getDocuments(jobId, conn)
@@ -135,6 +125,7 @@ export const MergePdfService = {
         const fileName = `${code}.pdf`
         const directory = publicationDirectory(previous?.NETWORK_PATH)
         await checkOutputDirectory(directory)
+        // Rebuild from source PDFs so moving the stamp replaces its old position.
         const blobs = await repo.getAllPdfBytes(conn, jobId)
         const pdf = await mergePages(
           pages.map((page) => ({
