@@ -9,6 +9,14 @@ Use MySQL 8.0.16+ and configure max_allowed_packet to at least 64 MiB on the ser
 
 For existing databases, apply `src/_workspace/sql/merge-pdf/migrations/20261028_add_page_deskew.sql` before deploying the Deskew-enabled API. New databases created with the current schema already include this column. The migration must only be applied once.
 
+Existing databases also need `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_position.sql` once before deploying configurable document-name placement. Existing jobs default to TOP_RIGHT. For mouse placement, also apply `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_coordinates.sql` once. NULL coordinates retain the previous preset; dragging stores normalized STAMP_X/STAMP_Y values for the first page.
+
+Cancellation now retains the current page/document/publication snapshot. Search with Including Cancelled to restore it; restoration recreates the saved PDF from its database bytes and refuses to overwrite a different file. Older cancellation snapshots are recovered using the job deletion audit timestamp.
+
+The frontend uses PDF.js for Fit, zoom, mouse panning and live deskew previews. Install its dependencies with `pnpm install --frozen-lockfile`; the predev/prebuild scripts prepare PDF.js fonts, CMaps and WASM assets locally. Deploy frontend and API together.
+
+All mounted application endpoints (Merge PDF, document order and email settings) use POST. Request values such as month and accounting search belong in the JSON request body. Uploads continue to use multipart FormData, and PDF/source downloads return binary responses to POST requests. Deploy API and frontend together when changing from the older verbs.
+
 Install API dependencies with `pnpm install` and use Node.js >=22.13 (Node.js 24 recommended).
 PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion also requires Windows Tahoma fonts.
 
@@ -110,15 +118,15 @@ Settings is a separate menu (Security Center ID 730), with its page at
 on the same page, side by side on larger screens and stacked on smaller screens, with separate Save/Reset actions.
 Document types can be dragged into order with the pointer or reordered using Space and arrow keys; changes are saved explicitly.
 The old `/email-settings` and `/merge-pdf/email-settings` page URLs redirect to Settings.
-Accounting email retains separate API routes/controllers/services/SQL under `email-settings`. The API uses GET `/email-settings/get`,
-GET `/email-settings/accounting-people` and PATCH `/email-settings/update`. Merge PDF routes are mounted
+Accounting email retains separate API routes/controllers/services/SQL under `email-settings`. The API uses POST `/email-settings/get`,
+POST `/email-settings/accounting-people` and POST `/email-settings/update`. Merge PDF routes are mounted
 under `/merge-pdf`, with file handling and business logic in its controller/services. The scheduler is started
 from `_workspace/jobs/emailDigestJob.ts` after the API starts, following the masterdata job pattern.
 The Save action uses the menu's `IS_UPDATE` permission through the existing project helper.
 
 Document order uses the existing `MERGE_PDF_CATEGORY.SORT_ORDER`; no new tables or columns are needed.
-GET `/settings/document-order/get` returns current categories in their configured order.
-PATCH `/settings/document-order/update` accepts the complete ordered list of category IDs and their
+POST `/settings/document-order/get` returns current categories in their configured order.
+POST `/settings/document-order/update` accepts the complete ordered list of category IDs and their
 revision numbers. Saves reject stale/incomplete lists and retire the current group before inserting
 replacement revisions in one transaction, preserving audit employee codes and old ordering.
 The editor loads the latest saved order before an import batch or Sort by document type action;

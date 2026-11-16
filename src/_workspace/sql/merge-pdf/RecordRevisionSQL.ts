@@ -2,13 +2,16 @@
 // The physical primary key is (entity identifier(s), REVISION_NO).
 const records = {
   MERGE_PDF_CATEGORY: ['CATEGORY_ID', 'CATEGORY_CODE CATEGORY_NAME SORT_ORDER REQUIRED_FOR_COMPLETE'],
-  MERGE_PDF_JOB: ['JOB_ID', 'JOB_CODE JOB_REFERENCE JOB_TITLE STATUS ROW_VERSION LAST_COMPLETED_AT'],
+  MERGE_PDF_JOB: ['JOB_ID', 'JOB_CODE JOB_REFERENCE JOB_TITLE STAMP_X STAMP_Y STAMP_FONT_SIZE STATUS ROW_VERSION LAST_COMPLETED_AT'],
   MERGE_PDF_DOCUMENT: [
     'DOCUMENT_ID',
     'JOB_ID CATEGORY_ID UPLOAD_ORDER ORIGINAL_FILE_NAME SOURCE_TYPE SOURCE_MIME ORIGINAL_SIZE_BYTES ORIGINAL_SHA256 ORIGINAL_BYTES ' +
       'NORMALIZED_PDF_SIZE_BYTES NORMALIZED_PDF_SHA256 NORMALIZED_PDF_BYTES PDF_PAGE_COUNT ENTRY_STATUS_CODE ENTRY_STATUS_SOURCE DESCRIPTION',
   ],
-  MERGE_PDF_PAGE: ['PAGE_ID', 'JOB_ID DOCUMENT_ID CATEGORY_ID CLASSIFICATION_SOURCE CLASSIFICATION_CONFIDENCE SOURCE_PAGE_NUMBER ROTATION_DEGREES DESKEW_DEGREES SORT_ORDER DESCRIPTION'],
+  MERGE_PDF_PAGE: [
+    'PAGE_ID',
+    'JOB_ID DOCUMENT_ID CATEGORY_ID CLASSIFICATION_SOURCE CLASSIFICATION_CONFIDENCE SOURCE_PAGE_NUMBER ROTATION_DEGREES DESKEW_DEGREES SORT_ORDER DESCRIPTION EDITOR_ANNOTATIONS',
+  ],
   MERGE_PDF_PUBLICATION: [
     'PUBLICATION_ID',
     'JOB_ID PUBLICATION_VERSION STATUS OUTPUT_FILE_NAME OUTPUT_SIZE_BYTES OUTPUT_SHA256 OUTPUT_PDF_BYTES OUTPUT_PAGE_COUNT NETWORK_PATH FAILURE_CODE PUBLISHED_AT',
@@ -51,7 +54,7 @@ export const RecordRevisionSQL = {
   },
   insertReplacement: (table: RevisionTable, rows: readonly RevisionRow[], changes: Record<string, unknown>, actor: string) => {
     const [keys, fields] = recordColumns(table)
-    const columns = [...keys, ...fields]
+    const columns = [...keys, ...fields, 'CREATE_DATE']
     const identity = identityOf(table, rows)
     const values: unknown[] = []
     const expressions = columns.map((column) => {
@@ -67,8 +70,8 @@ export const RecordRevisionSQL = {
     })
     return {
       sql: `INSERT INTO ${table} (${columns.join(', ')}, REVISION_NO, IS_CURRENT, INUSE, CREATE_BY, UPDATE_BY)
-     SELECT ${expressions.join(', ')}, REVISION_NO + 1, 1, 1, ?, ? FROM ${table} WHERE ${identity.predicate}`,
-      params: [...values, actor, actor, ...identity.params],
+     SELECT ${expressions.join(', ')}, REVISION_NO + 1, 1, 1, CREATE_BY, ? FROM ${table} WHERE ${identity.predicate}`,
+      params: [...values, actor, ...identity.params],
     }
   },
 }

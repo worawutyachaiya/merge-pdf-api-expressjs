@@ -1,3 +1,5 @@
+import type { PageAnnotation } from '@src/_workspace/services/merge-pdf/PageAnnotations'
+
 export type SourceType = 'PDF' | 'IMAGE' | 'EXCEL'
 export type BatchPageAction = { kind: 'category'; categoryId: number } | { kind: 'rotate'; delta: 90 | 270 } | { kind: 'remove' }
 export type ClassificationSource = 'AUTO_TEXT' | 'AUTO_OCR' | 'FILENAME' | 'UNKNOWN' | 'USER'
@@ -13,6 +15,9 @@ export interface JobSummary {
   INUSE: number
   JOB_CODE: string
   JOB_TITLE: string
+  STAMP_X?: number | null
+  STAMP_Y?: number | null
+  STAMP_FONT_SIZE?: number | null
   JOB_REFERENCE: string | null
   STATUS: 'DRAFT' | 'COMPLETING' | 'COMPLETED'
   ROW_VERSION: number
@@ -28,6 +33,20 @@ export interface JobSummary {
   NETWORK_PATH?: string | null
   DOCUMENT_PAGE_COUNTS?: Record<string, number>
   UNCLASSIFIED_PAGE_COUNT?: number
+}
+
+export interface MergePdfDashboardSummary {
+  draftCount: number
+  completedCount: number
+}
+
+export interface MergePdfDashboardJob {
+  JOB_ID: number
+  JOB_CODE: string
+  JOB_TITLE: string
+  STATUS: 'DRAFT' | 'COMPLETED'
+  CREATE_DATE: string
+  DOCUMENT_COUNT: number
 }
 
 export interface DocumentStatusSummary {
@@ -50,6 +69,7 @@ export interface DocumentSummary {
 }
 
 export interface PageSummary {
+  EDITOR_ANNOTATIONS?: PageAnnotation[] | null
   PAGE_ID: number
   DOCUMENT_ID: number
   SOURCE_PAGE_NUMBER: number

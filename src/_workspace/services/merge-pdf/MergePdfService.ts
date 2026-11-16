@@ -14,6 +14,7 @@ import { removePublishedPdfs } from './PublicationDeletion'
 import { classifyCombinedPdf } from './CombinedPdfClassification'
 import { detectEntryStatus04 } from './EntryStatusDetection'
 import { applyEditorChanges, type PreparedEditorChanges } from './EditorChanges'
+import { jobStampCoordinates } from './StampCoordinates'
 import { EmailDigestService } from '@src/_workspace/services/email-settings/EmailDigestService'
 
 export class MergePdfError extends Error {
@@ -38,7 +39,12 @@ const detail = async (jobId: number): Promise<JobDetail> => {
   const job = await repo.getJob(jobId)
   if (!job) throw new MergePdfError('Job not found', 404)
   const [documents, pages, publications] = await Promise.all([repo.getDocuments(jobId), repo.getPages(jobId), repo.getPublications(jobId)])
-  return { job: { ...job, ...summarizeDocumentPages(pages) }, documents, pages, publications: publications.map(publication => ({ ...publication, SHARE_PATH: publicationSharePath(publication.NETWORK_PATH) })) }
+  return {
+    job: { ...job, ...summarizeDocumentPages(pages) },
+    documents,
+    pages,
+    publications: publications.map((publication) => ({ ...publication, SHARE_PATH: publicationSharePath(publication.NETWORK_PATH) })),
+  }
 }
 
 const persistDocument = async (
@@ -100,6 +106,12 @@ export const MergePdfService = {
     try {
       await MySQLExecute.withTransaction(async (conn) => {
         const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+        const previous = await repo.getLatestPublished(jobId, conn)
+        if (changes.stampCoordinates)
+          changes = {
+            ...changes,
+            stampCoordinates: { ...changes.stampCoordinates, fontSize: changes.stampCoordinates.fontSize ?? job.STAMP_FONT_SIZE ?? 10 },
+          }
         await applyEditorChanges(conn, jobId, changes)
         const pages = await repo.getPages(jobId, conn)
         const documents = await repo.getDocuments(jobId, conn)
@@ -108,17 +120,24 @@ export const MergePdfService = {
           throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
         const entryIds = new Set(pages.filter((page) => page.CATEGORY_ID === 1).map((page) => page.DOCUMENT_ID))
         if (documents.some((doc) => entryIds.has(doc.DOCUMENT_ID) && doc.ENTRY_STATUS_CODE !== '04')) throw new MergePdfError('Every import entry must have status 04', 400)
-        const previous = await repo.getLatestPublished(jobId, conn)
         if (previous && !isImportCode(job.JOB_CODE)) throw new MergePdfError('This document uses a legacy filename. Contact your administrator.', 409)
         const code = isImportCode(job.JOB_CODE) ? job.JOB_CODE : await repo.assignImportCode(conn, jobId, getImportPrefix())
         const fileName = `${code}.pdf`
         const directory = publicationDirectory(previous?.NETWORK_PATH)
         await checkOutputDirectory(directory)
+        // Rebuild from source PDFs so moving the stamp replaces its old position.
         const blobs = await repo.getAllPdfBytes(conn, jobId)
         const pdf = await mergePages(
-          pages.map((page) => ({ documentId: page.DOCUMENT_ID, sourcePageNumber: page.SOURCE_PAGE_NUMBER, rotationDegrees: page.ROTATION_DEGREES, deskewDegrees: page.DESKEW_DEGREES })),
+          pages.map((page) => ({
+            documentId: page.DOCUMENT_ID,
+            sourcePageNumber: page.SOURCE_PAGE_NUMBER,
+            rotationDegrees: page.ROTATION_DEGREES,
+            deskewDegrees: page.DESKEW_DEGREES,
+            annotations: page.EDITOR_ANNOTATIONS ?? [],
+          })),
           new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES])),
-          code
+          code,
+          changes.stampCoordinates ?? jobStampCoordinates(job)
         )
         const original = await readFile(path.join(directory, fileName)).catch((error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return null
@@ -191,9 +210,32 @@ export const MergePdfService = {
     titleFilter: string,
     updateByFilter: string,
     sortBy: 'JOB_TITLE' | 'STATUS' | 'DOCUMENT_COUNT' | 'PAGE_COUNT' | 'UPDATE_DATE' | 'UPDATE_BY',
-    sortDesc: boolean
+    sortDesc: boolean,
+    includingCancelled = false,
+    createdBy = '',
+    createDateFrom: string | null = null,
+    createDateTo: string | null = null,
+    updatedBy = '',
+    updateDateFrom: string | null = null,
+    updateDateTo: string | null = null
   ) => {
-    const result = await repo.listJobs(search, status, page, pageSize, titleFilter, updateByFilter, sortBy, sortDesc)
+    const result = await repo.listJobs(
+      search,
+      status,
+      page,
+      pageSize,
+      titleFilter,
+      updateByFilter,
+      sortBy,
+      sortDesc,
+      includingCancelled,
+      createdBy,
+      createDateFrom,
+      createDateTo,
+      updatedBy,
+      updateDateFrom,
+      updateDateTo
+    )
     const summaries = await repo.getDocumentStatuses(result.rows.map((job) => job.JOB_ID))
     return {
       ...result,
@@ -203,6 +245,17 @@ export const MergePdfService = {
       })),
     }
   },
+  dashboard: (from: string | null, to: string | null, createdBy: string, updatedFrom: string | null, updatedTo: string | null, updatedBy: string) =>
+    repo.getDashboardSummary(from, to, createdBy, updatedFrom, updatedTo, updatedBy),
+  dashboardStatusJobs: (
+    from: string | null,
+    to: string | null,
+    createdBy: string,
+    updatedFrom: string | null,
+    updatedTo: string | null,
+    updatedBy: string,
+    status: 'DRAFT' | 'COMPLETED'
+  ) => repo.getDashboardStatusJobs(from, to, createdBy, updatedFrom, updatedTo, updatedBy, status),
   detail,
 
   create: async (_title: string, reference: string | null, month?: string): Promise<JobDetail> => {
@@ -253,6 +306,50 @@ export const MergePdfService = {
       throw new MergePdfError(error instanceof Error ? error.message : 'Could not delete the document and its shared PDF', 503)
     }
     return { JOB_ID: jobId }
+  },
+
+  restoreJob: async (jobId: number, expectedVersion: number): Promise<JobDetail> => {
+    let createdPath: string | undefined
+    try {
+      await MySQLExecute.withTransaction(async (conn) => {
+        await repo.restoreJob(conn, jobId, expectedVersion)
+        const publication = await repo.getLatestPublished(jobId, conn)
+        if (publication) {
+          const directory = publicationDirectory(publication.NETWORK_PATH)
+          await checkOutputDirectory(directory)
+          const target = path.join(directory, publication.OUTPUT_FILE_NAME)
+          const exists = await readFile(target)
+            .then(() => true)
+            .catch((error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return false
+              throw error
+            })
+          await publishPdf(directory, publication.OUTPUT_FILE_NAME, publication.OUTPUT_PDF_BYTES, false)
+          if (!exists) createdPath = target
+        }
+      })
+    } catch (error) {
+      if (createdPath) await unlink(createdPath)
+      throw new MergePdfError(error instanceof Error ? error.message : 'Could not restore document', 409)
+    }
+    return detail(jobId)
+  },
+
+  categoryPdf: async (jobId: number, categoryId: number): Promise<Buffer> => {
+    const current = await detail(jobId)
+    const pages = current.pages.filter((page) => page.CATEGORY_ID === categoryId && page.CLASSIFICATION_SOURCE !== 'UNKNOWN')
+    if (!pages.length) throw new MergePdfError('No pages for this document type', 404)
+    const blobs = await MySQLExecute.withTransaction((conn) => repo.getAllPdfBytes(conn, jobId))
+    return mergePages(
+      pages.map((page) => ({
+        documentId: page.DOCUMENT_ID,
+        sourcePageNumber: page.SOURCE_PAGE_NUMBER,
+        rotationDegrees: page.ROTATION_DEGREES,
+        deskewDegrees: page.DESKEW_DEGREES,
+        annotations: page.EDITOR_ANNOTATIONS ?? [],
+      })),
+      new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
+    )
   },
 
   addDocument: async (
@@ -416,7 +513,9 @@ export const MergePdfService = {
             pages.map((page) => ({
               documentId: page.DOCUMENT_ID,
               sourcePageNumber: page.SOURCE_PAGE_NUMBER,
-              rotationDegrees: page.ROTATION_DEGREES, deskewDegrees: page.DESKEW_DEGREES,
+              rotationDegrees: page.ROTATION_DEGREES,
+              deskewDegrees: page.DESKEW_DEGREES,
+              annotations: page.EDITOR_ANNOTATIONS ?? [],
             })),
             new Map(blobs.map((blob) => [blob.DOCUMENT_ID, blob.NORMALIZED_PDF_BYTES]))
           )
@@ -432,7 +531,7 @@ export const MergePdfService = {
               throw error
             }
           }
-          const stampedPdf = await stampDocumentName(pdf, code)
+          const stampedPdf = await stampDocumentName(pdf, code, jobStampCoordinates(job))
           const fileName = `${code}.pdf`
           if (fields) await repo.updateJob(conn, jobId, code, fields.reference)
           const publicationId = await repo.insertPublication(conn, jobId, version, fileName, stampedPdf, sha256(stampedPdf), pages.length, path.join(outputDirectory, fileName))

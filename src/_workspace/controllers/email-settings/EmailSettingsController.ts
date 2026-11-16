@@ -31,7 +31,7 @@ const handle =
 export const EmailSettingsController = {
   detail: handle('Get email settings', () => EmailSettingsService.getSettings()),
   accountingPeople: handle('Search Accounting email recipients', (req) => {
-    const { search } = accountingPeopleFields.parse(req.query)
+    const { search } = accountingPeopleFields.parse(req.body ?? {})
     return EmailSettingsService.searchAccountingPeople(search)
   }),
   save: handle(

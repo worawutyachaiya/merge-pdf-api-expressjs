@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { MergePdfError, MergePdfService } from '@src/_workspace/services/merge-pdf/MergePdfService'
 import { getPageThumbnail, renderPdfThumbnails } from '@src/_workspace/services/merge-pdf/PageThumbnail'
 import { normalizeFile, extractPage } from '@src/_workspace/services/merge-pdf/PdfEngine'
+import { prepareTiffEStamp } from '@src/_workspace/services/merge-pdf/EStampImage'
 import { classifyCombinedPdf } from '@src/_workspace/services/merge-pdf/CombinedPdfClassification'
 import { detectDocumentType } from '@src/_workspace/services/merge-pdf/DocumentTypeDetection'
 import { detectEntryStatus04 } from '@src/_workspace/services/merge-pdf/EntryStatusDetection'
@@ -40,13 +41,35 @@ type Handler = (req: Request, res: Response) => Promise<void>
 const readOnlyMethods = new Set([
   'Preview next document code',
   'List Merge PDF jobs',
+  'Load Combination dashboard',
+  'Load Combination status documents',
   'View Merge PDF job',
   'Preview Merge PDF document',
   'Preview Merge PDF page',
   'Thumbnail Merge PDF page',
   'Download merged PDF',
   'Download source document',
+  'Preview document category',
 ])
+
+const dateTimeFilter = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value.replace(' ', 'T')}Z`)
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 19).replace('T', ' ') === value
+  }, 'Invalid date')
+  .nullable()
+  .default(null)
+
+const dateRangeFilters = z.object({
+  from: dateTimeFilter,
+  to: dateTimeFilter,
+  createdBy: z.string().max(100).default(''),
+  updatedFrom: dateTimeFilter,
+  updatedTo: dateTimeFilter,
+  updatedBy: z.string().max(100).default(''),
+})
 
 const safe =
   (method: string, handler: Handler) =>
@@ -73,6 +96,10 @@ const safe =
   }
 
 export const MergePdfController = {
+  prepareEStampImage: safe('Prepare E-stamp image', async (req, res) => {
+    if (!req.file) throw new Error('Select a TIFF image')
+    respond(res, await prepareTiffEStamp(req.file.originalname, req.file.buffer), 'Prepare E-stamp image')
+  }),
   detectDocumentType: async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ Status: false, Message: 'Select a file', ResultOnDb: [] })
@@ -146,8 +173,23 @@ export const MergePdfController = {
         pageSize: z.coerce.number().int().min(1).max(100).default(10),
         titleFilter: z.string().max(255).default(''),
         updateByFilter: z.string().max(100).default(''),
+        createdBy: z.string().max(100).default(''),
+        createDateFrom: dateTimeFilter,
+        createDateTo: dateTimeFilter,
+        updatedBy: z.string().max(100).default(''),
+        updateDateFrom: dateTimeFilter,
+        updateDateTo: dateTimeFilter,
         sortBy: z.enum(['JOB_TITLE', 'STATUS', 'DOCUMENT_COUNT', 'PAGE_COUNT', 'UPDATE_DATE', 'UPDATE_BY']).default('UPDATE_DATE'),
         sortDesc: z.boolean().default(true),
+        includingCancelled: z.boolean().default(false),
+      })
+      .refine((filters) => !filters.createDateFrom || !filters.createDateTo || filters.createDateFrom <= filters.createDateTo, {
+        message: 'Start date must be on or before end date',
+        path: ['createDateTo'],
+      })
+      .refine((filters) => !filters.updateDateFrom || !filters.updateDateTo || filters.updateDateFrom <= filters.updateDateTo, {
+        message: 'Start date must be on or before end date',
+        path: ['updateDateTo'],
       })
       .parse(req.body)
     const result = await MergePdfService.list(
@@ -158,16 +200,70 @@ export const MergePdfController = {
       filters.titleFilter.trim(),
       filters.updateByFilter.trim(),
       filters.sortBy,
-      filters.sortDesc
+      filters.sortDesc,
+      filters.includingCancelled,
+      filters.createdBy.trim(),
+      filters.createDateFrom,
+      filters.createDateTo,
+      filters.updatedBy.trim(),
+      filters.updateDateFrom,
+      filters.updateDateTo
     )
     respond(res, result.rows, 'List Merge PDF jobs', 200, result.total)
+  }),
+  dashboard: safe('Load Combination dashboard', async (req, res) => {
+    const { from, to, createdBy, updatedFrom, updatedTo, updatedBy } = dateRangeFilters
+      .superRefine((range, context) => {
+        if (range.from && range.to && range.from > range.to) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['to'],
+          })
+        }
+        if (range.updatedFrom && range.updatedTo && range.updatedFrom > range.updatedTo) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['updatedTo'],
+          })
+        }
+      })
+      .parse(req.body)
+    respond(res, await MergePdfService.dashboard(from, to, createdBy.trim(), updatedFrom, updatedTo, updatedBy.trim()), 'Load Combination dashboard')
+  }),
+  dashboardStatusJobs: safe('Load Combination status documents', async (req, res) => {
+    const { from, to, createdBy, updatedFrom, updatedTo, updatedBy, status } = dateRangeFilters
+      .extend({ status: z.enum(['DRAFT', 'COMPLETED']) })
+      .superRefine((range, context) => {
+        if (range.from && range.to && range.from > range.to) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['to'],
+          })
+        }
+        if (range.updatedFrom && range.updatedTo && range.updatedFrom > range.updatedTo) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Start date must be on or before end date',
+            path: ['updatedTo'],
+          })
+        }
+      })
+      .parse(req.body)
+    respond(res, await MergePdfService.dashboardStatusJobs(from, to, createdBy.trim(), updatedFrom, updatedTo, updatedBy.trim(), status), 'Load Combination status documents')
   }),
   create: safe('Create Merge PDF job', async (req, res) => {
     const fields = jobFields.parse(req.body)
     respond(res, await MergePdfService.create(fields.title, fields.reference, fields.month), 'Create Merge PDF job', 201)
   }),
   nextCode: safe('Preview next document code', async (req, res) => {
-    const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional().parse(req.query.month)
+    const month = z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+      .optional()
+      .parse(req.body?.month)
     respond(res, { code: await MergePdfService.nextCode(month) }, 'Preview next document code')
   }),
   batchPages: safe('Update selected pages', async (req, res) => {
@@ -188,6 +284,16 @@ export const MergePdfController = {
   deleteJob: safe('Delete Merge PDF job', async (req, res) => {
     const fields = versionFields.parse(req.body)
     respond(res, await MergePdfService.deleteJob(id.parse(req.params.jobId), fields.rowVersion), 'Delete Merge PDF job')
+  }),
+  restoreJob: safe('Restore Merge PDF job', async (req, res) => {
+    const fields = versionFields.parse(req.body)
+    respond(res, await MergePdfService.restoreJob(id.parse(req.params.jobId), fields.rowVersion), 'Restore Merge PDF job')
+  }),
+  previewCategory: safe('Preview document category', async (req, res) => {
+    const categoryId = z.coerce.number().int().min(1).max(10).parse(req.params.categoryId)
+    const bytes = await MergePdfService.categoryPdf(id.parse(req.params.jobId), categoryId)
+    res.type('pdf').setHeader('Content-Disposition', 'inline; filename="document.pdf"')
+    res.send(bytes)
   }),
   downloadSource: safe('Download source document', async (req, res) => {
     const file = await MergePdfService.originalDocument(id.parse(req.params.jobId), id.parse(req.params.documentId))
@@ -264,7 +370,12 @@ export const MergePdfController = {
     res.send(bytes)
   }),
   previewPage: safe('Preview Merge PDF page', async (req, res) => {
-    const bytes = await MergePdfService.pagePdf(id.parse(req.params.jobId), id.parse(req.params.pageId), previewRotation.parse(req.body?.rotation), z.number().min(-15).max(15).optional().parse(req.body?.deskew))
+    const bytes = await MergePdfService.pagePdf(
+      id.parse(req.params.jobId),
+      id.parse(req.params.pageId),
+      previewRotation.parse(req.body?.rotation),
+      z.number().min(-15).max(15).optional().parse(req.body?.deskew)
+    )
     if (!bytes) throw new MergePdfError('Page not found', 404)
     res.type('pdf').setHeader('Content-Disposition', 'inline; filename="page.pdf"')
     res.setHeader('Cache-Control', 'private, max-age=300')
