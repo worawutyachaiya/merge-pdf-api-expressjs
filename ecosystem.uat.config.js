@@ -8,7 +8,7 @@ module.exports = {
         NODE_ENV: 'uat',
       },
       out_file: '/dev/null',
-      error_file: '/dev/null',
+      error_file: '/root/.pm2/logs/merge-pdf-uat-error.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
     },
   ],

@@ -506,7 +506,6 @@ export const MergePdfService = {
           try {
             await checkOutputDirectory(outputDirectory)
           } catch (error) {
-            console.error('Merge PDF output check failed:', error)
             throw new MergePdfError(error instanceof Error ? error.message : 'PDF output folder is unavailable', 503)
           }
           const pdf = await mergePages(

@@ -69,18 +69,36 @@ export const checkOutputDirectory = async (directory = getOutputDirectory()): Pr
   const temporary = path.join(directory, `.merge-pdf-check-${token}.tmp`)
   const renamed = path.join(directory, `.merge-pdf-check-${token}.verified`)
   let ownedPath: string | undefined
+  let step = 'validate-path'
   try {
     if (!path.isAbsolute(directory)) throw Object.assign(new Error('Use an absolute output path'), { code: 'INVALID_PATH' })
+    step = 'stat-directory'
     if (!(await stat(directory)).isDirectory()) throw Object.assign(new Error('Output must be a directory'), { code: 'ENOTDIR' })
+    step = 'write-probe'
     await writeFile(temporary, token, { flag: 'wx' })
     ownedPath = temporary
+    step = 'rename-probe'
     await rename(temporary, renamed)
     ownedPath = renamed
-    if ((await readFile(renamed, 'utf8')) !== token) throw Object.assign(new Error('Output verification failed'), { code: 'EIO' })
+    step = 'read-probe'
+    const contents = await readFile(renamed, 'utf8')
+    step = 'verify-probe'
+    if (contents !== token) throw Object.assign(new Error('Output verification failed'), { code: 'EIO' })
+    step = 'unlink-probe'
     await unlink(renamed)
     ownedPath = undefined
   } catch (error) {
-    throw new PublicationStorageError(directory, 'verify file access', error)
+    const storageError = new PublicationStorageError(directory, 'verify file access', error)
+    const fsError = error as (NodeJS.ErrnoException & { dest?: string }) | null | undefined
+    console.error('Merge PDF output check failed:', {
+      directory,
+      step,
+      code: storageError.code,
+      syscall: fsError?.syscall,
+      path: fsError?.path,
+      dest: fsError?.dest,
+    })
+    throw storageError
   } finally {
     if (ownedPath) await unlink(ownedPath).catch(() => undefined)
   }
