@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 
 export const getOutputDirectory = (): string => {
   const directory = process.env.MERGE_PDF_OUTPUT_DIR?.trim()
@@ -62,6 +63,21 @@ export class PublicationStorageError extends Error {
   }
 }
 
+const probeReadRetryDelaysMs = [250, 500, 1000]
+
+const readRenamedProbe = async (filePath: string): Promise<string> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await readFile(filePath, 'utf8')
+    } catch (error) {
+      const fsError = error as NodeJS.ErrnoException | null | undefined
+      const retryDelay = probeReadRetryDelaysMs[attempt]
+      if (fsError?.code !== 'EPERM' || fsError.syscall !== 'open' || retryDelay === undefined) throw error
+      await delay(retryDelay)
+    }
+  }
+}
+
 // Use a unique probe to test the same operations that publication requires.
 // Never create a missing network folder or change an existing document.
 export const checkOutputDirectory = async (directory = getOutputDirectory()): Promise<void> => {
@@ -81,7 +97,7 @@ export const checkOutputDirectory = async (directory = getOutputDirectory()): Pr
     await rename(temporary, renamed)
     ownedPath = renamed
     step = 'read-probe'
-    const contents = await readFile(renamed, 'utf8')
+    const contents = await readRenamedProbe(renamed)
     step = 'verify-probe'
     if (contents !== token) throw Object.assign(new Error('Output verification failed'), { code: 'EIO' })
     step = 'unlink-probe'
