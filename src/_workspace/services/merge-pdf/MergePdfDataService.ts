@@ -178,7 +178,8 @@ export const MergePdfDataService = {
     createDateTo: string | null = null,
     updatedBy = '',
     updateDateFrom: string | null = null,
-    updateDateTo: string | null = null
+    updateDateTo: string | null = null,
+    countTotal = true
   ): Promise<{ rows: JobRow[]; total: number }> => {
     const params = [
       includingCancelled ? 1 : 0,
@@ -207,9 +208,9 @@ export const MergePdfDataService = {
     ]
     const [rows, counts] = await Promise.all([
       MySQLExecute.queryParams<JobRow[]>(MergePdfSQL.listJobs(sortBy, sortDesc), [...params, pageSize, (page - 1) * pageSize]),
-      MySQLExecute.queryParams<TotalRow[]>(MergePdfSQL.countJobs(), params),
+      countTotal ? MySQLExecute.queryParams<TotalRow[]>(MergePdfSQL.countJobs(), params) : [],
     ])
-    return { rows, total: counts[0].TOTAL }
+    return { rows, total: counts[0]?.TOTAL ?? 0 }
   },
 
   getJob: async (jobId: number, conn?: PoolConnection): Promise<JobRow | undefined> => {

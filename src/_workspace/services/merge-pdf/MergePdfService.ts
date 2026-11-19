@@ -66,6 +66,13 @@ const getDetectedHawb = async (jobs: readonly JobSummary[]) => {
   return values
 }
 
+type JobWithHawb = JobSummary & { HAWB: string | null }
+
+const withHawb = async (jobs: JobSummary[]): Promise<JobWithHawb[]> => {
+  const detected = await getDetectedHawb(jobs)
+  return jobs.map(job => ({ ...job, HAWB: job.HAWB_OVERRIDE ?? detected.get(job.JOB_ID) ?? null }))
+}
+
 const detail = async (jobId: number): Promise<JobDetail> => {
   const job = await repo.getJob(jobId)
   if (!job) throw new MergePdfError('Job not found', 404)
@@ -254,13 +261,14 @@ export const MergePdfService = {
     createDateTo: string | null = null,
     updatedBy = '',
     updateDateFrom: string | null = null,
-    updateDateTo: string | null = null
+    updateDateTo: string | null = null,
+    hawb = ''
   ) => {
-    const result = await repo.listJobs(
+    const fetchJobs = (currentPage: number, limit: number, countTotal: boolean) => repo.listJobs(
       search,
       status,
-      page,
-      pageSize,
+      currentPage,
+      limit,
       titleFilter,
       updateByFilter,
       sortBy,
@@ -271,20 +279,39 @@ export const MergePdfService = {
       createDateTo,
       updatedBy,
       updateDateFrom,
-      updateDateTo
+      updateDateTo,
+      countTotal
     )
-    const [summaries, detectedHawb] = await Promise.all([
-      repo.getDocumentStatuses(result.rows.map((job) => job.JOB_ID)),
-      getDetectedHawb(result.rows),
-    ])
-    return {
-      ...result,
-      rows: result.rows.map((job) => ({
-        ...job,
-        HAWB: job.HAWB_OVERRIDE ?? detectedHawb.get(job.JOB_ID) ?? null,
-        ...(summaries.get(job.JOB_ID) ?? { DOCUMENT_PAGE_COUNTS: {}, UNCLASSIFIED_PAGE_COUNT: 0 }),
-      })),
+    const addDocumentStatuses = async ({ rows, total }: { rows: JobWithHawb[]; total: number }) => {
+      const summaries = await repo.getDocumentStatuses(rows.map(job => job.JOB_ID))
+      return {
+        total,
+        rows: rows.map(job => ({
+          ...job,
+          ...(summaries.get(job.JOB_ID) ?? { DOCUMENT_PAGE_COUNTS: {}, UNCLASSIFIED_PAGE_COUNT: 0 }),
+        })),
+      }
     }
+    if (hawb) {
+      const needle = hawb.toLowerCase()
+      const offset = (page - 1) * pageSize
+      const batchSize = 100
+      const matches: JobWithHawb[] = []
+      let total = 0
+      // Apply the filter across the ordered candidates before returning the requested page.
+      for (let batch = 1; ; batch++) {
+        const { rows } = await fetchJobs(batch, batchSize, false)
+        for (const row of await withHawb(rows)) {
+          if (!row.HAWB?.toLowerCase().includes(needle)) continue
+          if (total >= offset && matches.length < pageSize) matches.push(row)
+          total++
+        }
+        if (rows.length < batchSize) break
+      }
+      return addDocumentStatuses({ rows: matches, total })
+    }
+    const result = await fetchJobs(page, pageSize, true)
+    return addDocumentStatuses({ rows: await withHawb(result.rows), total: result.total })
   },
   dashboard: (from: string | null, to: string | null, createdBy: string, updatedFrom: string | null, updatedTo: string | null, updatedBy: string) =>
     repo.getDashboardSummary(from, to, createdBy, updatedFrom, updatedTo, updatedBy),

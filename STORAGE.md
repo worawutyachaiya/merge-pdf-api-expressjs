@@ -15,6 +15,8 @@ Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_stamp_style.sql` onc
 
 The Windows fonts in the editor use the font faces installed on the device. For Index exports, the API also needs the same embeddable faces. It reads the installed Windows Fonts directory by default. `MERGE_PDF_SYSTEM_FONT_DIR` can point to another directory containing locally installed, licensed faces.
 
+Set `MERGE_PDF_SYSTEM_FONT_DIR` in the deployed API's environment for the target mode. The account that runs the API must be able to read that directory. Restart the API after the change. If passing the variable from the shell, use `pm2 restart <app> --update-env`. Check `GET /merge-pdf/editor/system-fonts` for the available faces before testing Index export. Remarks use the device's fonts.
+
 Existing databases also need `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_position.sql` once before deploying configurable document-name placement. Existing jobs default to TOP_RIGHT. For mouse placement, also apply `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_coordinates.sql` once. NULL coordinates retain the previous preset; dragging stores normalized STAMP_X/STAMP_Y values for the first page.
 
 Cancellation now retains the current page/document/publication snapshot. Search with Including Cancelled to restore it; restoration recreates the saved PDF from its database bytes and refuses to overwrite a different file. Older cancellation snapshots are recovered using the job deletion audit timestamp.

@@ -178,6 +178,7 @@ export const MergePdfController = {
     const filters = z
       .object({
         search: z.string().max(100).default(''),
+        hawb: z.string().trim().max(1000).default(''),
         status: z.enum(['ALL', 'DRAFT', 'COMPLETED']).default('ALL'),
         page: z.coerce.number().int().min(1).max(100000).default(1),
         pageSize: z.coerce.number().int().min(1).max(100).default(10),
@@ -217,7 +218,8 @@ export const MergePdfController = {
       filters.createDateTo,
       filters.updatedBy.trim(),
       filters.updateDateFrom,
-      filters.updateDateTo
+      filters.updateDateTo,
+      filters.hawb
     )
     respond(res, result.rows, 'List Merge PDF jobs', 200, result.total)
   }),

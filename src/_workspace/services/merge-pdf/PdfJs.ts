@@ -5,8 +5,10 @@ const importPdfJs = new Function('return import("pdfjs-dist/legacy/build/pdf.mjs
 let modulePromise: ReturnType<typeof importPdfJs> | undefined
 const assets = path.dirname(require.resolve('pdfjs-dist/package.json')).replace(/\\/g, '/') + '/'
 
+export const getPdfJs = () => (modulePromise ??= importPdfJs())
+
 export const loadPdfJs = async (bytes: Buffer) => {
-  const { getDocument } = await (modulePromise ??= importPdfJs())
+  const { getDocument } = await getPdfJs()
   return getDocument({
     data: new Uint8Array(bytes),
     cMapUrl: assets + 'cmaps/',
