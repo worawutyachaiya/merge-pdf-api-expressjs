@@ -1,8 +1,11 @@
 import type { PDFPageProxy } from 'pdfjs-dist'
 import { getPdfJs, loadPdfJs } from './PdfJs'
 
-// Some customs PDF fonts duplicate or drop combining marks in this label.
-const label = new RegExp(Array.from('ใบตราสงเลขท').join('[\\p{M}\\s]*') + '\\p{M}*', 'u')
+// Some customs PDF fonts duplicate marks or drop the ท while retaining the marks in ที่.
+const label = new RegExp(
+  Array.from('ใบตราสงเลข').join('[\\p{M}\\s]*') + '(?:[\\p{M}\\s]*ท\\p{M}*|\\s*[ี่]+)',
+  'u',
+)
 const value = /^[\s:：=]*[A-Za-z\p{N}\s./-]{0,80}\(([^()\r\n]{1,1000})\)/u
 
 interface TextBlock {
