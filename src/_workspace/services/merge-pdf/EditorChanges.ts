@@ -6,6 +6,8 @@ import { MergePdfDataService as repo } from '@src/_workspace/services/merge-pdf/
 import { normalizeFile } from './PdfEngine'
 import { detectEntryStatus04 } from './EntryStatusDetection'
 import { pageAnnotationsSchema, validatePageAnnotations } from './PageAnnotations'
+import { STAMP_COORDINATE_MIN, STAMP_COORDINATE_MAX } from './StampCoordinates'
+import { textStyleSchema } from './TextFormatting'
 
 const identifier = z
   .number()
@@ -18,16 +20,23 @@ const description = z
   .nullable()
   .optional()
   .transform((value) => value || null)
+const stampCoordinate = z.number().min(STAMP_COORDINATE_MIN).max(STAMP_COORDINATE_MAX)
+
 export const editorChangesSchema = z
   .object({
-    stampCoordinates: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), fontSize: z.number().min(6).max(48).optional() }).optional(),
+    stampCoordinates: z.object({
+      x: stampCoordinate,
+      y: stampCoordinate,
+      fontSize: z.number().min(6).max(48).optional(),
+      style: textStyleSchema.optional(),
+    }).optional(),
     pages: z
       .array(
         z.object({
           PAGE_ID: identifier,
           DOCUMENT_ID: identifier,
           SOURCE_PAGE_NUMBER: z.number().int().positive(),
-          CATEGORY_ID: z.number().int().min(1).max(10),
+          CATEGORY_ID: z.number().int().min(1).max(255),
           ROTATION_DEGREES: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
           DESKEW_DEGREES: z.number().min(-15).max(15).default(0),
           CLASSIFICATION_SOURCE: z.enum(['AUTO_TEXT', 'AUTO_OCR', 'FILENAME', 'UNKNOWN', 'USER']).nullable(),
@@ -41,7 +50,7 @@ export const editorChangesSchema = z
       .array(
         z.object({
           DOCUMENT_ID: identifier,
-          CATEGORY_ID: z.number().int().min(1).max(10),
+          CATEGORY_ID: z.number().int().min(1).max(255),
           ENTRY_STATUS_CODE: z.literal('04').nullable(),
           ENTRY_STATUS_SOURCE: z.enum(['USER', 'DOCUMENT', 'SYSTEM']).nullable().optional(),
           DESCRIPTION: description,
@@ -58,16 +67,6 @@ export const editorChangesSchema = z
       DESCRIPTION: doc.CATEGORY_ID === 10 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) ? doc.DESCRIPTION : null,
     })),
   }))
-  .superRefine((changes, ctx) => {
-    for (const [index, page] of changes.pages.entries()) {
-      if (page.CATEGORY_ID === 10 && !page.DESCRIPTION)
-        ctx.addIssue({ code: 'custom', path: ['pages', index, 'DESCRIPTION'], message: 'Description is required for every Other page' })
-    }
-    for (const [index, doc] of changes.documents.entries()) {
-      if (doc.DOCUMENT_ID < 0 && doc.CATEGORY_ID === 10 && changes.pages.some((page) => page.DOCUMENT_ID === doc.DOCUMENT_ID && page.CATEGORY_ID === 10) && !doc.DESCRIPTION)
-        ctx.addIssue({ code: 'custom', path: ['documents', index, 'DESCRIPTION'], message: 'Import description is required for Other documents' })
-    }
-  })
 export type EditorChanges = z.infer<typeof editorChangesSchema>
 export type PreparedEditorChanges = EditorChanges & { uploads: Awaited<ReturnType<typeof prepareEditorUploads>> }
 
@@ -85,6 +84,12 @@ export const applyEditorChanges = async (conn: PoolConnection, jobId: number, ch
   if (changes.stampCoordinates) await repo.updateStampCoordinates(conn, jobId, changes.stampCoordinates)
   const existingDocuments = await repo.getDocuments(jobId, conn)
   const originalPages = await repo.getPages(jobId, conn)
+  const enabledCategories = await repo.getEnabledCategoryIds(conn)
+  const originalCategories = new Map(originalPages.map((page) => [page.PAGE_ID, page.CATEGORY_ID]))
+  if (changes.documents.some((doc) => doc.DOCUMENT_ID < 0 && !enabledCategories.has(doc.CATEGORY_ID)) ||
+      changes.pages.some((page) => !enabledCategories.has(page.CATEGORY_ID) && originalCategories.get(page.PAGE_ID) !== page.CATEGORY_ID)) {
+    throw new z.ZodError([{ code: 'custom', path: ['pages'], message: 'A selected document type is no longer enabled. Reload the document types and choose an enabled type.' }])
+  }
   if (
     new Set(changes.pages.map((page) => page.PAGE_ID)).size !== changes.pages.length ||
     new Set(changes.documents.map((doc) => doc.DOCUMENT_ID)).size !== changes.documents.length

@@ -32,6 +32,7 @@ const receiveFile = (req: Request, res: Response, next: NextFunction): void => {
 }
 
 router.post('/editor/prepare', multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 20 * 1024 * 1024 } }).single('file'), MergePdfController.prepareFile)
+router.get('/editor/system-fonts', MergePdfController.systemIndexFonts)
 router.post('/editor/estamp-image', multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 2 * 1024 * 1024 } }).single('file'), MergePdfController.prepareEStampImage)
 router.post('/editor/detect-document-type', receiveFile, MergePdfController.detectDocumentType)
 
@@ -54,6 +55,7 @@ router.post('/jobs/next-code', MergePdfController.nextCode)
 router.post('/jobs/:jobId/pages/batch', MergePdfController.batchPages)
 
 router.post('/jobs/:jobId/detail', MergePdfController.detail)
+router.post('/jobs/:jobId/hawb', MergePdfController.updateHawb)
 
 router.post('/jobs/:jobId/save-draft', MergePdfController.saveDraft)
 

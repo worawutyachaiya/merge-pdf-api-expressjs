@@ -92,5 +92,5 @@ export const classifyCombinedPdfWithText = async (
   return { pages: results, hasExtractableText }
 }
 
-export const classifyCombinedPdf = async (bytes: Buffer, pageCount?: number): Promise<PageClassification[]> =>
-  (await classifyCombinedPdfWithText(bytes, pageCount)).pages
+export const classifyCombinedPdf = async (bytes: Buffer, pageCount: number, enabled: ReadonlySet<number>): Promise<PageClassification[]> =>
+  (await classifyCombinedPdfWithText(bytes, pageCount)).pages.map((page) => enabled.has(page.categoryId) ? page : unknown())

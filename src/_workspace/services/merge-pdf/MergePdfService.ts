@@ -13,6 +13,7 @@ import { summarizeDocumentPages } from './DocumentStatus'
 import { removePublishedPdfs } from './PublicationDeletion'
 import { classifyCombinedPdf } from './CombinedPdfClassification'
 import { detectEntryStatus04 } from './EntryStatusDetection'
+import { detectHawb } from './HawbDetection'
 import { applyEditorChanges, type PreparedEditorChanges } from './EditorChanges'
 import { jobStampCoordinates } from './StampCoordinates'
 import { EmailDigestService } from '@src/_workspace/services/email-settings/EmailDigestService'
@@ -34,6 +35,36 @@ const assertEditable = (job: JobSummary | undefined, expectedVersion: number): J
 }
 
 const sha256 = (bytes: Buffer): Buffer => createHash('sha256').update(bytes).digest()
+
+// Source PDFs are immutable. Cache only the extracted value, never the PDF bytes.
+const hawbBySourcePage = new Map<string, Promise<string | null>>()
+const sourceHawb = (documentId: number, page: number) => {
+  const key = `${documentId}:${page}`
+  const cached = hawbBySourcePage.get(key)
+  if (cached) return cached
+  const detection = repo.getDocumentPdf(documentId).then((bytes) => {
+    if (bytes) return detectHawb(bytes, page)
+    hawbBySourcePage.delete(key)
+    return null
+  }).catch(() => {
+    hawbBySourcePage.delete(key)
+    return null
+  })
+  hawbBySourcePage.set(key, detection)
+  if (hawbBySourcePage.size > 512) hawbBySourcePage.delete(hawbBySourcePage.keys().next().value!)
+  return detection
+}
+
+const getDetectedHawb = async (jobs: readonly JobSummary[]) => {
+  const sources = await repo.getImportEntrySources(jobs.filter((job) => job.INUSE === 1 && job.HAWB_OVERRIDE === null).map((job) => job.JOB_ID))
+  const values = new Map<number, string | null>()
+  for (let i = 0; i < sources.length; i += 4) {
+    await Promise.all(sources.slice(i, i + 4).map(async (source) => {
+      values.set(source.JOB_ID, await sourceHawb(source.DOCUMENT_ID, source.SOURCE_PAGE_NUMBER))
+    }))
+  }
+  return values
+}
 
 const detail = async (jobId: number): Promise<JobDetail> => {
   const job = await repo.getJob(jobId)
@@ -59,11 +90,13 @@ const persistDocument = async (
   description: string | null = null
 ): Promise<JobDetail> => {
   const hasOther = classifications ? classifications.some((page) => page.categoryId === 10) : categoryId === 10
-  if (hasOther && !description?.trim()) throw new MergePdfError('Description is required before importing Other documents', 400)
   const entryPages = Array.from({ length: normalized.pageCount }, (_, index) => index + 1).filter((number) => (classifications?.[number - 1].categoryId ?? categoryId) === 1)
   const autoConfirmed = !entryStatusCode && normalized.sourceType === 'PDF' && (await detectEntryStatus04(normalized.pdfBytes, entryPages))
   await MySQLExecute.withTransaction(async (conn) => {
     assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+    const enabled = await repo.getEnabledCategoryIds(conn)
+    if (!enabled.has(categoryId) || classifications?.some((page) => !enabled.has(page.categoryId)))
+      throw new MergePdfError('A selected document type is no longer enabled', 400)
     const uploadOrder = await repo.nextUploadOrder(conn, jobId)
     const firstOrder = await repo.nextPageOrder(conn, jobId)
     const documentId = await repo.insertDocument(conn, {
@@ -86,8 +119,9 @@ const persistDocument = async (
     const pages = await repo.getPages(jobId, conn)
     const added = pages.filter((page) => page.DOCUMENT_ID === documentId)
     const ordered = pages.filter((page) => page.DOCUMENT_ID !== documentId)
+    const ranks = new Map([...enabled].map((id, index) => [id, index]))
     for (const page of added) {
-      const insertAfter = ordered.findLastIndex((existing) => existing.CATEGORY_ID <= page.CATEGORY_ID)
+      const insertAfter = ordered.findLastIndex((existing) => (ranks.get(existing.CATEGORY_ID) ?? Infinity) <= (ranks.get(page.CATEGORY_ID) ?? Infinity))
       ordered.splice(insertAfter + 1, 0, page)
     }
     await repo.reorderPages(
@@ -110,14 +144,14 @@ export const MergePdfService = {
         if (changes.stampCoordinates)
           changes = {
             ...changes,
-            stampCoordinates: { ...changes.stampCoordinates, fontSize: changes.stampCoordinates.fontSize ?? job.STAMP_FONT_SIZE ?? 10 },
+            stampCoordinates: { ...jobStampCoordinates(job), ...changes.stampCoordinates },
           }
         await applyEditorChanges(conn, jobId, changes)
         const pages = await repo.getPages(jobId, conn)
         const documents = await repo.getDocuments(jobId, conn)
         const required = await repo.getRequiredCategoryIds(conn)
         if (!pages.length || required.some((id) => !pages.some((page) => page.CATEGORY_ID === id)))
-          throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
+          throw new MergePdfError('Add pages for all required document types before completing', 400)
         const entryIds = new Set(pages.filter((page) => page.CATEGORY_ID === 1).map((page) => page.DOCUMENT_ID))
         if (documents.some((doc) => entryIds.has(doc.DOCUMENT_ID) && doc.ENTRY_STATUS_CODE !== '04')) throw new MergePdfError('Every import entry must have status 04', 400)
         if (previous && !isImportCode(job.JOB_CODE)) throw new MergePdfError('This document uses a legacy filename. Contact your administrator.', 409)
@@ -179,12 +213,15 @@ export const MergePdfService = {
     if (!pageIds.length || pageIds.length > 500 || new Set(pageIds).size !== pageIds.length) throw new MergePdfError('Select distinct pages', 400)
     await MySQLExecute.withTransaction(async (conn) => {
       assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      if (action.kind === 'category' && !(await repo.getEnabledCategoryIds(conn)).has(action.categoryId))
+        throw new MergePdfError('The selected document type is no longer enabled', 400)
       const pages = await repo.getPages(jobId, conn)
-      if (pageIds.some((id) => !pages.some((page) => page.PAGE_ID === id))) throw new MergePdfError('Selected page not found. Reload and try again', 404)
+      const pagesById = new Map(pages.map((page) => [page.PAGE_ID, page]))
+      if (pageIds.some((id) => !pagesById.has(id))) throw new MergePdfError('Selected page not found. Reload and try again', 404)
       const documents = new Set<number>()
       for (const pageId of pageIds) {
         if (action.kind === 'category') await repo.updatePageCategory(conn, jobId, pageId, action.categoryId)
-        else if (action.kind === 'rotate') await repo.rotatePage(conn, jobId, pageId, action.delta)
+        else if (action.kind === 'rotate') await repo.rotatePage(conn, jobId, pageId, action.delta, pagesById.get(pageId)?.EDITOR_ANNOTATIONS)
         else {
           const documentId = await repo.softDeletePage(conn, jobId, pageId)
           if (documentId !== undefined) documents.add(documentId)
@@ -236,11 +273,15 @@ export const MergePdfService = {
       updateDateFrom,
       updateDateTo
     )
-    const summaries = await repo.getDocumentStatuses(result.rows.map((job) => job.JOB_ID))
+    const [summaries, detectedHawb] = await Promise.all([
+      repo.getDocumentStatuses(result.rows.map((job) => job.JOB_ID)),
+      getDetectedHawb(result.rows),
+    ])
     return {
       ...result,
       rows: result.rows.map((job) => ({
         ...job,
+        HAWB: job.HAWB_OVERRIDE ?? detectedHawb.get(job.JOB_ID) ?? null,
         ...(summaries.get(job.JOB_ID) ?? { DOCUMENT_PAGE_COUNTS: {}, UNCLASSIFIED_PAGE_COUNT: 0 }),
       })),
     }
@@ -257,6 +298,14 @@ export const MergePdfService = {
     status: 'DRAFT' | 'COMPLETED'
   ) => repo.getDashboardStatusJobs(from, to, createdBy, updatedFrom, updatedTo, updatedBy, status),
   detail,
+
+  updateHawb: async (jobId: number, expectedVersion: number, hawb: string | null): Promise<JobDetail> => {
+    await MySQLExecute.withTransaction(async (conn) => {
+      const job = assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      if (job.HAWB_OVERRIDE !== hawb) await repo.updateHawb(conn, jobId, hawb)
+    })
+    return detail(jobId)
+  },
 
   create: async (_title: string, reference: string | null, month?: string): Promise<JobDetail> => {
     const jobId = await MySQLExecute.withTransaction(async (conn) => {
@@ -384,13 +433,15 @@ export const MergePdfService = {
       const message = error instanceof Error ? error.message : 'Invalid document'
       throw new MergePdfError(message, message.startsWith('Excel conversion is unavailable') ? 503 : 400)
     }
-    const classifications = await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount)
+    const classifications = await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount, await repo.getEnabledCategoryIds())
     return persistDocument(jobId, expectedVersion, 10, null, fileName, bytes, normalized, classifications, description)
   },
 
   updatePageCategory: async (jobId: number, pageId: number, expectedVersion: number, categoryId: number): Promise<JobDetail> => {
     await MySQLExecute.withTransaction(async (conn) => {
       assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
+      if (!(await repo.getEnabledCategoryIds(conn)).has(categoryId))
+        throw new MergePdfError('The selected document type is no longer enabled', 400)
       if ((await repo.updatePageCategory(conn, jobId, pageId, categoryId)) !== 1) {
         throw new MergePdfError('Page not found', 404)
       }
@@ -402,7 +453,9 @@ export const MergePdfService = {
   rotatePage: async (jobId: number, pageId: number, expectedVersion: number, delta: 90 | 270): Promise<JobDetail> => {
     await MySQLExecute.withTransaction(async (conn) => {
       assertEditable(await repo.lockJob(conn, jobId), expectedVersion)
-      if ((await repo.rotatePage(conn, jobId, pageId, delta)) !== 1) throw new MergePdfError('Page not found', 404)
+      const page = (await repo.getPages(jobId, conn)).find((current) => current.PAGE_ID === pageId)
+      if (!page || (await repo.rotatePage(conn, jobId, pageId, delta, page.EDITOR_ANNOTATIONS)) !== 1)
+        throw new MergePdfError('Page not found', 404)
       await repo.bumpJob(conn, jobId)
     })
     return detail(jobId)
@@ -495,7 +548,7 @@ export const MergePdfService = {
           const previous = await repo.getLatestPublished(jobId, conn)
           const outputDirectory = publicationDirectory(previous?.NETWORK_PATH)
           if (requiredCategoryIds.some((categoryId) => !pages.some((page) => page.CATEGORY_ID === categoryId))) {
-            throw new MergePdfError('Import entry, Invoice and HAWB or AWB are required', 400)
+            throw new MergePdfError('Add pages for all required document types before completing', 400)
           }
           const importEntryDocumentIds = new Set(pages.filter((page) => page.CATEGORY_ID === 1).map((page) => page.DOCUMENT_ID))
           const entries = documents.filter((document) => importEntryDocumentIds.has(document.DOCUMENT_ID))

@@ -2,6 +2,8 @@ import { RecordRevisionSQL, revisionSql } from '@src/_workspace/sql/merge-pdf/Re
 import { MergePdfSQL } from '@src/_workspace/sql/merge-pdf/MergePdfSQL'
 import { getAuditEmployeeCode } from '@src/_workspace/services/merge-pdf/AuditActor'
 import { FileSequenceInactiveError } from '@src/_workspace/services/merge-pdf/ImportFileName'
+import { rotatePageCovers } from './PageAnnotations'
+import type { StampCoordinates } from './StampCoordinates'
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
@@ -65,6 +67,11 @@ interface DashboardStatsRow extends RowDataPacket {
 interface DashboardJobRow extends RowDataPacket, MergePdfDashboardJob {}
 interface CategoryIdRow extends RowDataPacket {
   CATEGORY_ID: number
+}
+interface ImportEntrySourceRow extends RowDataPacket {
+  JOB_ID: number
+  DOCUMENT_ID: number
+  SOURCE_PAGE_NUMBER: number
 }
 interface DocumentStatusRow extends RowDataPacket {
   JOB_ID: number
@@ -143,9 +150,18 @@ export const MergePdfDataService = {
     ]),
 
   getRequiredCategoryIds: async (conn: PoolConnection): Promise<number[]> => {
-    const [rows] = await conn.query<CategoryIdRow[]>(MergePdfSQL.getRequiredCategoryIds())
+    const [rows] = await conn.query<CategoryIdRow[]>(MergePdfSQL.getEnabledCategoryIds(true))
     return rows.map((row) => row.CATEGORY_ID)
   },
+
+  getEnabledCategoryIds: async (conn?: PoolConnection): Promise<Set<number>> => {
+    const sql = MergePdfSQL.getEnabledCategoryIds()
+    const rows = conn ? (await conn.query<CategoryIdRow[]>(sql))[0] : await MySQLExecute.queryParams<CategoryIdRow[]>(sql)
+    return new Set(rows.map((row) => row.CATEGORY_ID))
+  },
+
+  getImportEntrySources: (jobIds: number[]): Promise<ImportEntrySourceRow[]> =>
+    jobIds.length ? MySQLExecute.queryParams<ImportEntrySourceRow[]>(MergePdfSQL.getImportEntrySources(jobIds.length), jobIds) : Promise.resolve([]),
 
   listJobs: async (
     search: string,
@@ -299,7 +315,7 @@ export const MergePdfDataService = {
     )
   },
 
-  updateStampCoordinates: async (conn: PoolConnection, jobId: number, coordinates: { x: number; y: number; fontSize?: number }): Promise<void> => {
+  updateStampCoordinates: async (conn: PoolConnection, jobId: number, coordinates: StampCoordinates): Promise<void> => {
     await replaceActiveRecords(
       conn,
       'MERGE_PDF_JOB',
@@ -309,6 +325,7 @@ export const MergePdfDataService = {
         STAMP_X: coordinates.x,
         STAMP_Y: coordinates.y,
         ...(coordinates.fontSize !== undefined ? { STAMP_FONT_SIZE: coordinates.fontSize } : {}),
+        ...(coordinates.style !== undefined ? { STAMP_STYLE: JSON.stringify(coordinates.style) } : {}),
       },
       getAuditEmployeeCode()
     )
@@ -321,6 +338,14 @@ export const MergePdfDataService = {
       MergePdfSQL.whereJob(),
       [jobId],
       { STATUS: revisionSql(MergePdfSQL.savedJobStatus()), ROW_VERSION: revisionSql(MergePdfSQL.incrementRowVersion()) },
+      getAuditEmployeeCode()
+    )
+  },
+
+  updateHawb: async (conn: PoolConnection, jobId: number, hawb: string | null): Promise<void> => {
+    await replaceActiveRecords(
+      conn, 'MERGE_PDF_JOB', MergePdfSQL.whereJob(), [jobId],
+      { HAWB_OVERRIDE: hawb, ROW_VERSION: revisionSql(MergePdfSQL.incrementRowVersion()) },
       getAuditEmployeeCode()
     )
   },
@@ -489,13 +514,18 @@ export const MergePdfDataService = {
     await replaceActiveRecords(conn, 'MERGE_PDF_DOCUMENT', MergePdfSQL.whereJobDocument(), [jobId, documentId], changes, getAuditEmployeeCode())
   },
 
-  rotatePage: async (conn: PoolConnection, jobId: number, pageId: number, delta: 90 | 270): Promise<number> => {
+  rotatePage: async (conn: PoolConnection, jobId: number, pageId: number, delta: 90 | 270, annotations?: PageSummary['EDITOR_ANNOTATIONS']): Promise<number> => {
     return replaceActiveRecords(
       conn,
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
-      { ROTATION_DEGREES: revisionSql(MergePdfSQL.rotatePage(), delta) },
+      {
+        ROTATION_DEGREES: revisionSql(MergePdfSQL.rotatePage(), delta),
+        ...(annotations?.some(item => item.kind === 'cover')
+          ? { EDITOR_ANNOTATIONS: JSON.stringify(rotatePageCovers(annotations, delta)) }
+          : {}),
+      },
       getAuditEmployeeCode()
     )
   },

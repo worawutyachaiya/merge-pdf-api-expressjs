@@ -5,9 +5,10 @@ export interface DocumentOrderRow extends RowDataPacket {
   CATEGORY_NAME: string
   SORT_ORDER: number
   REVISION_NO: number
+  IS_ENABLED: number
+  REQUIRED_FOR_COMPLETE: number
 }
 
-export interface DocumentOrderItem {
-  categoryId: number
-  revisionNo: number
-}
+export type DocumentOrderItem =
+  | { categoryId: number; revisionNo: number; name?: string; enabled?: boolean }
+  | { categoryId: null; name: string; enabled: true }

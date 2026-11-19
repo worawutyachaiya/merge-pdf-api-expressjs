@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import sharp from 'sharp'
+import { hexColor, textFormatting } from './TextFormatting'
 
 const placement = {
   id: z.string().uuid(),
@@ -13,12 +14,13 @@ export const pageAnnotationsSchema = z.array(z.discriminatedUnion('kind', [
   z.object({
     ...placement, kind: z.literal('remark'), text: z.string().max(2000),
     fontSize: z.number().min(6).max(72).optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    ...textFormatting,
   }),
   z.object({
     ...placement, kind: z.literal('estamp'),
     image: z.string().max(2_800_000).regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/),
   }),
+  z.object({ ...placement, kind: z.literal('cover'), color: hexColor }),
 ])).max(50).superRefine((items, ctx) => {
   if (new Set(items.map(item => item.id)).size !== items.length)
     ctx.addIssue({ code: 'custom', message: 'Duplicate page annotation' })
@@ -29,6 +31,15 @@ export const pageAnnotationsSchema = z.array(z.discriminatedUnion('kind', [
 })
 
 export type PageAnnotation = z.infer<typeof pageAnnotationsSchema>[number]
+export type PageCover = Extract<PageAnnotation, { kind: 'cover' }>
+
+export const rotatePageCovers = (items: readonly PageAnnotation[], delta: 90 | 270): PageAnnotation[] =>
+  items.map((item) => {
+    if (item.kind !== 'cover') return item
+    const x = delta === 90 ? 1 - item.y - item.height : item.y
+    const y = delta === 90 ? item.x : 1 - item.x - item.width
+    return { ...item, x: Math.max(0, x), y: Math.max(0, y), width: item.height, height: item.width }
+  })
 
 export const validatePageAnnotations = async (pages: readonly { EDITOR_ANNOTATIONS?: PageAnnotation[] | null }[]) => {
   let total = 0

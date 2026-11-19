@@ -1,4 +1,5 @@
 import type { PageAnnotation } from '@src/_workspace/services/merge-pdf/PageAnnotations'
+import type { TextStyle } from '@src/_workspace/services/merge-pdf/TextFormatting'
 
 export type SourceType = 'PDF' | 'IMAGE' | 'EXCEL'
 export type BatchPageAction = { kind: 'category'; categoryId: number } | { kind: 'rotate'; delta: 90 | 270 } | { kind: 'remove' }
@@ -18,7 +19,10 @@ export interface JobSummary {
   STAMP_X?: number | null
   STAMP_Y?: number | null
   STAMP_FONT_SIZE?: number | null
+  STAMP_STYLE?: TextStyle | null
   JOB_REFERENCE: string | null
+  HAWB_OVERRIDE: string | null
+  HAWB?: string | null
   STATUS: 'DRAFT' | 'COMPLETING' | 'COMPLETED'
   ROW_VERSION: number
   REVISION_NO: number

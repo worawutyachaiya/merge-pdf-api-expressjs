@@ -3,6 +3,7 @@ import { z } from 'zod'
 export const id = z.coerce.number().int().positive().safe()
 
 export const version = z.number().int().positive()
+export const categoryIdField = z.coerce.number().int().min(1).max(255)
 
 export const previewRotation = z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional()
 
@@ -15,6 +16,7 @@ export const jobFields = z.object({
 export const editFields = jobFields.extend({ rowVersion: version })
 
 export const versionFields = z.object({ rowVersion: version })
+export const hawbFields = versionFields.extend({ hawb: z.string().max(1000).nullable() })
 
 export const completeFields = versionFields.extend({ fields: jobFields.optional() })
 
@@ -27,7 +29,7 @@ export const batchFields = versionFields.extend({
     .max(500)
     .refine((ids) => new Set(ids).size === ids.length, 'Duplicate page IDs'),
   action: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('category'), categoryId: z.number().int().min(1).max(10) }),
+    z.object({ kind: z.literal('category'), categoryId: categoryIdField }),
     z.object({ kind: z.literal('rotate'), delta: z.union([z.literal(90), z.literal(270)]) }),
     z.object({ kind: z.literal('remove') }),
   ]),
@@ -35,7 +37,7 @@ export const batchFields = versionFields.extend({
 
 export const uploadFields = z.object({
   rowVersion: z.coerce.number().int().positive(),
-  categoryId: z.coerce.number().int().min(1).max(10),
+  categoryId: categoryIdField,
   description: z.string().trim().max(1000).nullable().optional(),
   entryStatusCode: z
     .string()
@@ -45,7 +47,7 @@ export const uploadFields = z.object({
 
 export const combinedUploadFields = z.object({ rowVersion: z.coerce.number().int().positive(), description: z.string().trim().max(1000).nullable().optional() })
 
-export const pageCategoryFields = versionFields.extend({ categoryId: z.number().int().min(1).max(10) })
+export const pageCategoryFields = versionFields.extend({ categoryId: categoryIdField })
 
 export const pageRotationFields = versionFields.extend({ delta: z.union([z.literal(90), z.literal(270)]) })
 

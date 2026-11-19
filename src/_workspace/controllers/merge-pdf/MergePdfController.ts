@@ -9,6 +9,8 @@ import { detectDocumentType } from '@src/_workspace/services/merge-pdf/DocumentT
 import { detectEntryStatus04 } from '@src/_workspace/services/merge-pdf/EntryStatusDetection'
 import { editorChangesSchema, prepareEditorUploads } from '@src/_workspace/services/merge-pdf/EditorChanges'
 import { AuditActorError, withAuditActor } from '@src/_workspace/services/merge-pdf/AuditActor'
+import { MergePdfDataService } from '@src/_workspace/services/merge-pdf/MergePdfDataService'
+import { availableSystemIndexFonts } from '@src/_workspace/services/merge-pdf/SystemIndexFonts'
 import {
   id,
   version,
@@ -24,6 +26,8 @@ import {
   pageCategoryFields,
   pageRotationFields,
   entryStatusFields,
+  categoryIdField,
+  hawbFields,
 } from '@src/_workspace/routes/merge-pdf/MergePdfValidation'
 
 const respond = (res: Response, result: unknown, method: string, status = 200, total?: number): void => {
@@ -50,6 +54,7 @@ const readOnlyMethods = new Set([
   'Download merged PDF',
   'Download source document',
   'Preview document category',
+  'List system index fonts',
 ])
 
 const dateTimeFilter = z
@@ -96,6 +101,9 @@ const safe =
   }
 
 export const MergePdfController = {
+  systemIndexFonts: safe('List system index fonts', async (_req, res) => {
+    respond(res, await availableSystemIndexFonts(), 'List system index fonts')
+  }),
   prepareEStampImage: safe('Prepare E-stamp image', async (req, res) => {
     if (!req.file) throw new Error('Select a TIFF image')
     respond(res, await prepareTiffEStamp(req.file.originalname, req.file.buffer), 'Prepare E-stamp image')
@@ -114,8 +122,10 @@ export const MergePdfController = {
       const combined = req.body.combined === 'true'
       if (combined && !req.file.originalname.toLowerCase().endsWith('.pdf')) throw new Error('Combined file must be a PDF')
       const normalized = await normalizeFile(req.file.originalname, req.file.buffer)
-      const classifications = combined ? await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount) : null
-      const categoryId = z.coerce.number().int().min(1).max(10).default(10).parse(req.body.categoryId)
+      const enabled = await MergePdfDataService.getEnabledCategoryIds()
+      const categoryId = combined ? 10 : categoryIdField.default(10).parse(req.body.categoryId)
+      if (!enabled.has(categoryId)) throw new Error('The selected document type is no longer enabled')
+      const classifications = combined ? await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount, enabled) : null
       const entryPages = Array.from({ length: normalized.pageCount }, (_, index) => index + 1).filter((number) => (classifications?.[number - 1].categoryId ?? categoryId) === 1)
       const confirmed = normalized.sourceType === 'PDF' && (await detectEntryStatus04(normalized.pdfBytes, entryPages))
       const images = await renderPdfThumbnails(normalized.pdfBytes, normalized.pageCount)
@@ -273,6 +283,10 @@ export const MergePdfController = {
   detail: safe('View Merge PDF job', async (req, res) => {
     respond(res, await MergePdfService.detail(id.parse(req.params.jobId)), 'View Merge PDF job')
   }),
+  updateHawb: safe('Update HAWB', async (req, res) => {
+    const fields = hawbFields.parse(req.body)
+    respond(res, await MergePdfService.updateHawb(id.parse(req.params.jobId), fields.rowVersion, fields.hawb), 'Update HAWB')
+  }),
   saveDraft: safe('Save Merge PDF draft', async (req, res) => {
     const fields = editFields.parse(req.body)
     respond(res, await MergePdfService.saveDraft(id.parse(req.params.jobId), fields.rowVersion, fields.title, fields.reference), 'Save Merge PDF draft')
@@ -290,7 +304,7 @@ export const MergePdfController = {
     respond(res, await MergePdfService.restoreJob(id.parse(req.params.jobId), fields.rowVersion), 'Restore Merge PDF job')
   }),
   previewCategory: safe('Preview document category', async (req, res) => {
-    const categoryId = z.coerce.number().int().min(1).max(10).parse(req.params.categoryId)
+    const categoryId = categoryIdField.parse(req.params.categoryId)
     const bytes = await MergePdfService.categoryPdf(id.parse(req.params.jobId), categoryId)
     res.type('pdf').setHeader('Content-Disposition', 'inline; filename="document.pdf"')
     res.send(bytes)

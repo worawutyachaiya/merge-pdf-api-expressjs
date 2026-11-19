@@ -9,6 +9,12 @@ Use MySQL 8.0.16+ and configure max_allowed_packet to at least 64 MiB on the ser
 
 For existing databases, apply `src/_workspace/sql/merge-pdf/migrations/20261028_add_page_deskew.sql` before deploying the Deskew-enabled API. New databases created with the current schema already include this column. The migration must only be applied once.
 
+Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_hawb_and_category_enabled.sql` once to existing databases before deploying editable HAWB and document types. Existing jobs use the detected HAWB until a user saves an override. Existing document types start enabled.
+
+Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_stamp_style.sql` once to existing databases before deploying index formatting. Remarks and cover rectangles use the existing page annotations column.
+
+The Windows fonts in the editor use the font faces installed on the device. For Index exports, the API also needs the same embeddable faces. It reads the installed Windows Fonts directory by default. `MERGE_PDF_SYSTEM_FONT_DIR` can point to another directory containing locally installed, licensed faces.
+
 Existing databases also need `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_position.sql` once before deploying configurable document-name placement. Existing jobs default to TOP_RIGHT. For mouse placement, also apply `src/_workspace/sql/merge-pdf/migrations/20261109_add_stamp_coordinates.sql` once. NULL coordinates retain the previous preset; dragging stores normalized STAMP_X/STAMP_Y values for the first page.
 
 Cancellation now retains the current page/document/publication snapshot. Search with Including Cancelled to restore it; restoration recreates the saved PDF from its database bytes and refuses to overwrite a different file. Older cancellation snapshots are recovered using the job deletion audit timestamp.
