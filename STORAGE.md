@@ -7,6 +7,21 @@ and USE if needed, and set the API's DB configuration to that name. It is a comp
 not a sequence of migration scripts; it does not alter definitions of tables that already exist.
 Use MySQL 8.0.16+ and configure max_allowed_packet to at least 64 MiB on the server.
 
+For an existing Merge PDF database with the revision schema, select that database and pause the API and
+email scheduler. Apply pending migrations in this order before starting the updated API.
+
+1. `src/_workspace/sql/merge-pdf/migrations/20261124_standardize_merge_pdf_schema.sql` gives monthly
+   sequences, email recipients, digest items and digest recipients stable IDs across revisions and
+   renames the timestamps to `LAST_COMPLETE_DATE` and `PUBLISH_DATE`.
+2. `src/_workspace/sql/merge-pdf/migrations/20261124_standardize_merge_pdf_table_ids.sql` renames the IDs
+   and their references to match `<TABLE_NAME>_ID`. For example, `MERGE_PDF_EMAIL_RECIPIENT` uses
+   `MERGE_PDF_EMAIL_RECIPIENT_ID`, and a reference to `MERGE_PDF_JOB` uses `MERGE_PDF_JOB_ID`.
+3. `src/_workspace/sql/merge-pdf/migrations/20261124_standardize_merge_pdf_table_metadata.sql` prefixes
+   the category code and name and the job code, title and reference with their full table names.
+
+The API aliases renamed columns to the response fields used by deployed frontends. A fresh database
+uses `schema.sql`, which includes the current names.
+
 For existing databases, apply `src/_workspace/sql/merge-pdf/migrations/20261028_add_page_deskew.sql` before deploying the Deskew-enabled API. New databases created with the current schema already include this column. The migration must only be applied once.
 
 Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_hawb_and_category_enabled.sql` once to existing databases before deploying editable HAWB and document types. Existing jobs use the detected HAWB until a user saves an override. Existing document types start enabled.
@@ -23,7 +38,9 @@ Cancellation now retains the current page/document/publication snapshot. Search 
 
 The frontend uses PDF.js for Fit, zoom, mouse panning and live deskew previews. Install its dependencies with `pnpm install --frozen-lockfile`; the predev/prebuild scripts prepare PDF.js fonts, CMaps and WASM assets locally. Deploy frontend and API together.
 
-All mounted application endpoints (Merge PDF, document order and email settings) use POST. Request values such as month and accounting search belong in the JSON request body. Uploads continue to use multipart FormData, and PDF/source downloads return binary responses to POST requests. Deploy API and frontend together when changing from the older verbs.
+Merge PDF, document order and email settings use POST with request values such as month and accounting
+search in the JSON body. The editor lists its system fonts with GET. Uploads use multipart FormData,
+and PDF/source downloads return binary responses to POST requests.
 
 Install API dependencies with `pnpm install` and use Node.js >=22.13 (Node.js 24 recommended).
 PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion also requires Windows Tahoma fonts.
@@ -82,11 +99,12 @@ failed database transactions restore files removed in that attempt.
 CREATE_BY and UPDATE_BY come from the logged-in profile's EMPLOYEE_CODE, following the project's
 existing client-profile pattern. Login and menu/action permissions follow the existing frontend Security Center flow, as in masterdata.
 
-Saved edits preserve row history in the same tables. Each entity has a stable identifier and a
+Saved edits preserve row history in the same tables. Each entity has a stable `<TABLE_NAME>_ID` and a
 `REVISION_NO`; together they form the physical primary key. Editing retires the current row with
 `INUSE = 0, IS_CURRENT = 0` and inserts a new revision with `INUSE = 1, IS_CURRENT = 1` in the same transaction. Retirement changes
-only these flags and audit fields, preserving old values, page positions and PDF bytes. The new row's
-CREATE_BY/UPDATE_BY identify the employee saving that revision (SYSTEM for scheduled work).
+only these flags and audit fields, preserving old values, page positions and PDF bytes. Revision
+replacement carries forward CREATE_BY and CREATE_DATE and records the editor in UPDATE_BY
+(SYSTEM for scheduled work). Saving the Accounting recipient list records a new selection for each selected employee.
 This covers document metadata, status 04, page type/rotation/order, Draft/Completed saves, monthly
 number allocation, email settings/recipient selections and delivery status/attempts. Deletes retire
 rows without inserting replacements. Frontend edits remain local until Save.
@@ -148,6 +166,12 @@ bind values and map results; application services handle the document and email 
 `RecordRevisionSQL` builds revision queries, while `RecordRevisionService` executes retirement
 and replacement on the caller's transaction connection. Queries retain bound parameters,
 row locks and the same transaction boundaries for document history and email delivery.
+
+The naming convention follows examples such as `FLOW.FLOW_CODE` and
+`ITEM_PURPOSE.ITEM_PURPOSE_NAME` for the entity's code and name. Shared audit and revision
+columns use `CREATE_BY`, `CREATE_DATE`, `UPDATE_BY`, `UPDATE_DATE`, `INUSE`, `IS_CURRENT`
+and `REVISION_NO`. Other fields describe their role, such as `ORIGINAL_FILE_NAME`,
+`ENTRY_STATUS_CODE` and `RECIPIENT_EMAIL`.
 
 The six email tables are:
 

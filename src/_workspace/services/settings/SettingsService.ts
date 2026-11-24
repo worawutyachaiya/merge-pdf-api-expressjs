@@ -50,7 +50,7 @@ export const SettingsService = {
           updated.map((item) => item.categoryId),
           {
             SORT_ORDER: valueByCategory((item) => item.position),
-            CATEGORY_NAME: valueByCategory((item) => item.name),
+            MERGE_PDF_CATEGORY_NAME: valueByCategory((item) => item.name),
             IS_ENABLED: valueByCategory((item) => Number(item.enabled)),
           },
           actor

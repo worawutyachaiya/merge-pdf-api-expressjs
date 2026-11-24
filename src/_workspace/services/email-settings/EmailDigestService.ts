@@ -32,7 +32,7 @@ const createDailyDigest = async (conn: PoolConnection, date: string, scheduleTim
     const codes = (await repo.recipientCodes(conn)).map((row) => String(row.EMPLOYEE_CODE))
     const people = queueCount && codes.length ? await EmailSettingsService.searchAccountingPeople('', codes) : []
     const status = queueCount === 0 ? 'SENT' : people.length === 0 ? 'NO_RECIPIENTS' : 'PENDING'
-    const digestId = existing?.DIGEST_ID ?? (await repo.insertDigest(conn, date, scheduleTime, status))
+    const digestId = existing?.MERGE_PDF_EMAIL_DIGEST_ID ?? (await repo.insertDigest(conn, date, scheduleTime, status))
     if (status === 'PENDING') await repo.attachDigestItems(conn, digestId, people)
     await conn.commit()
   } catch (error) {
@@ -42,12 +42,12 @@ const createDailyDigest = async (conn: PoolConnection, date: string, scheduleTim
 }
 
 const processPendingDigest = async (conn: PoolConnection, digest: DigestRow): Promise<void> => {
-  const items = await repo.digestItems(conn, digest.DIGEST_ID)
+  const items = await repo.digestItems(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID)
   if (!items.length) {
-    await repo.cancelEmptyDigest(conn, digest.DIGEST_ID)
+    await repo.cancelEmptyDigest(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID)
     return
   }
-  const recipients = await repo.pendingRecipients(conn, digest.DIGEST_ID)
+  const recipients = await repo.pendingRecipients(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID)
   let errors = 0
   for (const recipient of recipients) {
     let failure: string | null = null
@@ -58,10 +58,10 @@ const processPendingDigest = async (conn: PoolConnection, digest: DigestRow): Pr
       failure = error instanceof Error ? error.message.slice(0, 1000) : 'Mail delivery failed'
     }
     // A database error after delivery must stop this run; it is not a mail failure.
-    await repo.recordRecipientAttempt(conn, digest.DIGEST_ID, recipient.EMPLOYEE_CODE, failure)
+    await repo.recordRecipientAttempt(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID, recipient.EMPLOYEE_CODE, failure)
   }
-  if (recipients.length) await repo.recordDigestAttempt(conn, digest.DIGEST_ID, errors)
-  await repo.finalizeDigest(conn, digest.DIGEST_ID)
+  if (recipients.length) await repo.recordDigestAttempt(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID, errors)
+  await repo.finalizeDigest(conn, digest.MERGE_PDF_EMAIL_DIGEST_ID)
 }
 
 export const EmailDigestService = {

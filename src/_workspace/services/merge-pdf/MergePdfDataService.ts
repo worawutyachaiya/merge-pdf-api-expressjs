@@ -296,7 +296,7 @@ export const MergePdfDataService = {
       { NEXT_VALUE: revisionSql(MergePdfSQL.incrementSequence()) },
       employeeCode
     )
-    await replaceActiveRecords(conn, 'MERGE_PDF_JOB', MergePdfSQL.whereJob(), [jobId], { JOB_CODE: code, JOB_TITLE: code }, employeeCode)
+    await replaceActiveRecords(conn, 'MERGE_PDF_JOB', MergePdfSQL.whereJob(), [jobId], { MERGE_PDF_JOB_CODE: code, MERGE_PDF_JOB_TITLE: code }, employeeCode)
     return code
   },
 
@@ -311,7 +311,7 @@ export const MergePdfDataService = {
       'MERGE_PDF_JOB',
       MergePdfSQL.whereJob(),
       [jobId],
-      { JOB_TITLE: title, JOB_REFERENCE: reference, ROW_VERSION: revisionSql(MergePdfSQL.incrementRowVersion()) },
+      { MERGE_PDF_JOB_TITLE: title, MERGE_PDF_JOB_REFERENCE: reference, ROW_VERSION: revisionSql(MergePdfSQL.incrementRowVersion()) },
       getAuditEmployeeCode()
     )
   },
@@ -360,7 +360,7 @@ export const MergePdfDataService = {
 
   restoreJob: async (conn: PoolConnection, jobId: number, expectedVersion: number): Promise<void> => {
     const [jobs] = await conn.query<(RowDataPacket & { ROW_VERSION: number; INUSE: number; IS_CURRENT: number; UPDATE_DATE: Date; UPDATE_BY: string })[]>(
-      'SELECT * FROM MERGE_PDF_JOB WHERE JOB_ID = ? ORDER BY REVISION_NO DESC LIMIT 1 FOR UPDATE',
+      MergePdfSQL.lockLatestJobRevision(),
       [jobId]
     )
     const job = jobs[0]
@@ -371,7 +371,7 @@ export const MergePdfDataService = {
     if (job.IS_CURRENT === 0) {
       for (const table of ['MERGE_PDF_DOCUMENT', 'MERGE_PDF_PAGE', 'MERGE_PDF_PUBLICATION'] as const) {
         const [rows] = await conn.query<RowDataPacket[]>(
-          `SELECT * FROM ${table} WHERE JOB_ID = ? AND INUSE = 0 AND IS_CURRENT = 0 AND UPDATE_DATE >= ? AND UPDATE_BY = ? FOR UPDATE`,
+          MergePdfSQL.lockCancelledChildRevisions(table),
           [jobId, job.UPDATE_DATE, job.UPDATE_BY]
         )
         if (rows.length) {
@@ -380,7 +380,7 @@ export const MergePdfDataService = {
         }
       }
     }
-    await conn.query('UPDATE MERGE_PDF_JOB SET IS_CURRENT = 0 WHERE JOB_ID = ? AND REVISION_NO = ?', [jobId, job.REVISION_NO])
+    await conn.query(MergePdfSQL.retireCancelledJobRevision(), [jobId, job.REVISION_NO])
     const replacement = RecordRevisionSQL.insertReplacement('MERGE_PDF_JOB', [job], { ROW_VERSION: job.ROW_VERSION + 1 }, actor)
     await conn.query(replacement.sql, replacement.params)
   },
@@ -473,7 +473,7 @@ export const MergePdfDataService = {
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
-      { CATEGORY_ID: categoryId, CLASSIFICATION_SOURCE: 'USER', CLASSIFICATION_CONFIDENCE: null, ...(categoryId === 10 ? {} : { DESCRIPTION: null }) },
+      { MERGE_PDF_CATEGORY_ID: categoryId, CLASSIFICATION_SOURCE: 'USER', CLASSIFICATION_CONFIDENCE: null, ...(categoryId === 10 ? {} : { DESCRIPTION: null }) },
       getAuditEmployeeCode()
     )
   },
@@ -492,15 +492,17 @@ export const MergePdfDataService = {
       DESCRIPTION: string | null
     }
   ): Promise<void> => {
+    const { CATEGORY_ID: categoryId, EDITOR_ANNOTATIONS: annotations, ...fields } = changes
     await replaceActiveRecords(
       conn,
       'MERGE_PDF_PAGE',
       MergePdfSQL.whereJobPage(),
       [jobId, pageId],
       {
-        ...changes,
-        DESCRIPTION: changes.CATEGORY_ID === 10 ? changes.DESCRIPTION : null,
-        ...(changes.EDITOR_ANNOTATIONS !== undefined ? { EDITOR_ANNOTATIONS: JSON.stringify(changes.EDITOR_ANNOTATIONS ?? []) } : {}),
+        ...fields,
+        MERGE_PDF_CATEGORY_ID: categoryId,
+        DESCRIPTION: categoryId === 10 ? fields.DESCRIPTION : null,
+        ...(annotations !== undefined ? { EDITOR_ANNOTATIONS: JSON.stringify(annotations ?? []) } : {}),
       },
       getAuditEmployeeCode()
     )
@@ -627,7 +629,7 @@ export const MergePdfDataService = {
       {
         STATUS: networkPath ? 'PUBLISHED' : 'FAILED',
         NETWORK_PATH: networkPath,
-        PUBLISHED_AT: networkPath ? new Date() : null,
+        PUBLISH_DATE: networkPath ? new Date() : null,
         FAILURE_CODE: networkPath ? null : 'NETWORK_WRITE_FAILED',
       },
       getAuditEmployeeCode()
@@ -643,7 +645,7 @@ export const MergePdfDataService = {
       {
         STATUS: revisionSql(MergePdfSQL.completedJobStatus(), networkPath),
         ROW_VERSION: revisionSql(MergePdfSQL.incrementRowVersion()),
-        LAST_COMPLETED_AT: revisionSql(MergePdfSQL.completionTimestamp(), networkPath),
+        LAST_COMPLETE_DATE: revisionSql(MergePdfSQL.completionTimestamp(), networkPath),
       },
       getAuditEmployeeCode()
     )

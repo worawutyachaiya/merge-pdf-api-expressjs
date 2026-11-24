@@ -23,7 +23,7 @@ export interface RecipientRow extends RowDataPacket {
 }
 
 export interface DigestRow extends RowDataPacket {
-  DIGEST_ID: number
+  MERGE_PDF_EMAIL_DIGEST_ID: number
   DIGEST_DATE: string
   STATUS: 'PENDING' | 'SENT' | 'NO_RECIPIENTS'
 }
@@ -37,6 +37,6 @@ export interface DigestRecipientRow extends RowDataPacket {
 export interface DigestItemRow extends RowDataPacket {
   JOB_CODE: string
   OUTPUT_FILE_NAME: string
-  PUBLISHED_AT: Date | string
+  PUBLISH_DATE: Date | string
   NETWORK_PATH: string
 }

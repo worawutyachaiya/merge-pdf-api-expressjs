@@ -45,7 +45,7 @@ export const sendDigestEmail = async (recipient: DigestRecipientRow, items: Dige
     <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;text-align:center;color:#4b5563">${index + 1}</td>
     <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;font-weight:bold;color:#1f2937">${escapeHtml(item.JOB_CODE)}</td>
     <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;color:#374151">${escapeHtml(item.OUTPUT_FILE_NAME)}</td>
-    <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;white-space:nowrap;color:#374151">${escapeHtml(formatBangkokDate(item.PUBLISHED_AT))}</td>
+    <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;white-space:nowrap;color:#374151">${escapeHtml(formatBangkokDate(item.PUBLISH_DATE))}</td>
     <td style="border-bottom:1px solid #e5e7eb;padding:11px 10px;word-break:break-all">
       <a href="${escapeHtml(toFileUrl(item.NETWORK_PATH))}" style="color:#176b52;font-weight:bold;text-decoration:underline">เปิดไฟล์ PDF</a>
       <div style="margin-top:4px;color:#6b7280;font-size:12px">${escapeHtml(item.NETWORK_PATH)}</div>
