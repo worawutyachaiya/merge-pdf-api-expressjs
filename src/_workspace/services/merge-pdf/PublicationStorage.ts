@@ -126,6 +126,7 @@ export const publishPdf = async (directory: string, fileName: string, bytes: Buf
   const finalPath = path.join(directory, fileName)
   const temporary = `${finalPath}.${randomUUID()}.tmp`
   let created = false
+  let step = 'check-destination'
   try {
     if (!overwrite) {
       const existing = await readFile(finalPath).catch((error: NodeJS.ErrnoException) => {
@@ -137,15 +138,30 @@ export const publishPdf = async (directory: string, fileName: string, bytes: Buf
         throw Object.assign(new Error('An unrelated file already exists at this path'), { code: 'EEXIST' })
       }
     }
+    step = 'write-pdf-temp'
     await writeFile(temporary, bytes, { flag: 'wx' })
     created = true
+    step = 'rename-pdf-temp'
     await rename(temporary, finalPath)
     created = false
     return finalPath
   } catch (error) {
     const existing = await readFile(finalPath).catch(() => null)
     if (existing && hash(existing).equals(hash(bytes))) return finalPath
-    throw new PublicationStorageError(directory, 'save merged PDF', error)
+    const storageError = new PublicationStorageError(directory, 'save merged PDF', error)
+    const fsError = error as (NodeJS.ErrnoException & { dest?: string }) | null | undefined
+    console.error('Merge PDF publish file failed:', {
+      fileName,
+      directory,
+      step,
+      code: storageError.code,
+      syscall: fsError?.syscall,
+      path: fsError?.path,
+      dest: fsError?.dest,
+      temporaryPath: temporary,
+      finalPath,
+    })
+    throw storageError
   } finally {
     if (created) await unlink(temporary).catch(() => undefined)
   }
