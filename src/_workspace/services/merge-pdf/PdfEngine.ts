@@ -11,7 +11,7 @@ import { loadPdfJs } from './PdfJs'
 import { isStandardFont, isSystemFont, type TextStyle } from './TextFormatting'
 import { loadSystemIndexFont } from './SystemIndexFonts'
 
-import type { SourceType } from '@src/_workspace/types/merge-pdf/MergePdf'
+import type { PageClassification, SourceType } from '@src/_workspace/types/merge-pdf/MergePdf'
 import { convertExcelToPdf } from './ExcelPdf'
 
 const MAX_PAGES = 500
@@ -24,6 +24,7 @@ export interface NormalizedFile {
   sourceMime: string
   pdfBytes: Buffer
   pageCount: number
+  pageClassifications?: PageClassification[]
 }
 
 const detectSource = (fileName: string, bytes: Buffer): { type: SourceType; mime: string } => {
@@ -49,11 +50,14 @@ const detectSource = (fileName: string, bytes: Buffer): { type: SourceType; mime
 export const normalizeFile = async (fileName: string, bytes: Buffer): Promise<NormalizedFile> => {
   const source = detectSource(fileName, bytes)
   let pdfBytes: Buffer
+  let pageClassifications: PageClassification[] | undefined
 
   if (source.type === 'PDF') {
     pdfBytes = bytes
   } else if (source.type === 'EXCEL') {
-    pdfBytes = await convertExcelToPdf(fileName, bytes)
+    const converted = await convertExcelToPdf(fileName, bytes)
+    pdfBytes = converted.pdfBytes
+    pageClassifications = converted.pageClassifications
   } else {
     const metadata = await sharp(bytes, { limitInputPixels: 60_000_000 }).metadata()
     if (!['jpeg', 'png', 'webp', 'tiff'].includes(metadata.format ?? '') || (metadata.pages ?? 1) !== 1) {
@@ -79,7 +83,7 @@ export const normalizeFile = async (fileName: string, bytes: Buffer): Promise<No
   if (pageCount < 1 || pageCount > MAX_PAGES || pdfBytes.length > MAX_PDF_BYTES) {
     throw new Error('Document exceeds the page or size limit')
   }
-  return { sourceType: source.type, sourceMime: source.mime, pdfBytes, pageCount }
+  return { sourceType: source.type, sourceMime: source.mime, pdfBytes, pageCount, pageClassifications }
 }
 
 const applyRotation = (page: import('pdf-lib').PDFPage, rotationDegrees: number): void => {

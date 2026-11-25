@@ -18,7 +18,7 @@ const headings: { categoryId: number; pattern: RegExp }[] = [
   { categoryId: 9, pattern: /^DELIVERY NOTE$/ },
 ]
 
-export const classifyDocumentHeadings = (lines: readonly string[]): PageClassification => {
+export const classifyDocumentHeadings = (lines: readonly string[], continuation?: PageClassification): PageClassification => {
   const matches = new Set<number>()
   for (const line of lines) {
     const text = line
@@ -33,6 +33,7 @@ export const classifyDocumentHeadings = (lines: readonly string[]): PageClassifi
       if (heading.pattern.test(text) || heading.pattern.test(thaiBaseText)) matches.add(heading.categoryId)
     }
   }
+  if (matches.size === 0 && continuation) return continuation
   return matches.size === 1 ? { categoryId: [...matches][0], source: 'AUTO_TEXT', confidence: 0.95 } : unknown()
 }
 

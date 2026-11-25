@@ -6,6 +6,9 @@ import { PDFDocument } from 'pdf-lib'
 import sharp from 'sharp'
 import * as XLSX from 'xlsx'
 
+import type { PageClassification } from '@src/_workspace/types/merge-pdf/MergePdf'
+import { classifyDocumentHeadings } from './CombinedPdfClassification'
+
 const DPI = 144
 const MAX_CELLS = 20_000
 const MAX_PAGES = 100
@@ -32,13 +35,15 @@ const segments = (indices: number[], size: (index: number) => number): Segment[]
 }
 const total = (items: Segment[]) => items.reduce((sum, item) => sum + item.size, 0)
 
-const partition = (items: Segment[], capacity: number, breaks = new Set<number>()): Segment[][] => {
+const partition = (items: Segment[], capacity: number, breaks: number[] = []): Segment[][] => {
   const result: Segment[][] = []
   let group: Segment[] = []
   let used = 0
   for (const item of items) {
     if (item.size > capacity + 0.01) unsupported('row/column larger than a printed page')
-    if (group.length && (used + item.size > capacity + 0.01 || breaks.has(item.index - 1))) {
+    const previous = group.at(-1)
+    const manualBreak = previous && breaks.some((breakAfter) => previous.index <= breakAfter && breakAfter < item.index)
+    if (previous && (used + item.size > capacity + 0.01 || manualBreak)) {
       result.push(group)
       group = []
       used = 0
@@ -76,19 +81,63 @@ const legacyWorkbook = (source: XLSX.WorkBook): ExcelJS.Workbook => {
   return result
 }
 
-const validateArchive = (book: XLSX.WorkBook): void => {
-  const files = (book as XLSX.WorkBook & { files?: Record<string, { content?: Uint8Array; data?: string | Uint8Array; asNodeBuffer?: () => Buffer }> }).files
+const isInvisibleShape = (shape: string): boolean => {
+  if (/<(?:[\w.-]+:)?txBody\b|\btextlink\s*=\s*["'][^"']+/i.test(shape)) return false
+  const properties = shape.match(/<(?:[\w.-]+:)?spPr\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?spPr\s*>/)?.[1]
+  if (!properties) return false
+  const transform = properties.match(/<(?:[\w.-]+:)?xfrm\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?xfrm\s*>/)?.[1]
+  const extent = transform?.match(/<(?:[\w.-]+:)?ext\b[^>]*>/)?.[0]
+  if (extent && /\bcx=["']0["']/.test(extent) && /\bcy=["']0["']/.test(extent)) return true
+
+  // Ignore the empty text-box placeholder when both its fill and outline are disabled.
+  const appearance = properties.split(/<(?:[\w.-]+:)?extLst\b/)[0]
+  const line = appearance.match(/<(?:[\w.-]+:)?ln\b[^>]*>[\s\S]*?<\/(?:[\w.-]+:)?ln\s*>/)?.[0]
+  const noFill = /<(?:[\w.-]+:)?noFill\b[^>]*\/>/
+  return !!line && noFill.test(line) && noFill.test(appearance.replace(line, '')) && !/<(?:[\w.-]+:)?(?:effectLst|effectDag|scene3d|sp3d)\b/.test(appearance)
+}
+
+type ArchiveEntry = { content?: Uint8Array; data?: string | Uint8Array; asNodeBuffer?: () => Buffer }
+const readEntry = (entry: ArchiveEntry | undefined): string => (entry?.asNodeBuffer ? entry.asNodeBuffer() : Buffer.from(entry?.content ?? entry?.data ?? '')).toString('utf8')
+
+const validateArchive = (files: Record<string, ArchiveEntry> | undefined): void => {
   for (const [fileName, file] of Object.entries(files ?? {})) {
     const name = fileName.replace(/^\/+/, '')
-    const text = () => (file.asNodeBuffer ? file.asNodeBuffer() : Buffer.from(file.content ?? file.data ?? '')).toString('utf8')
     if (/^xl\/(charts|embeddings)\//i.test(name)) unsupported('charts or embedded objects')
     if (/^xl\/drawings\/drawing.*\.xml$/i.test(name)) {
-      if (/<(?:\w+:)?(?:sp|cxnSp|graphicFrame|grpSp)\b/.test(text())) unsupported('shapes or text boxes')
+      const drawing = readEntry(file)
+      const shapes = /<(?:[\w.-]+:)?sp(?=[\s/>])[^>]*>[\s\S]*?<\/(?:[\w.-]+:)?sp\s*>/g
+      const remaining = drawing.replace(shapes, (shape) => (isInvisibleShape(shape) ? '' : shape))
+      if (/<(?:[\w.-]+:)?(?:sp|cxnSp|graphicFrame|grpSp)(?=[\s/>])/.test(remaining)) unsupported('visible shapes or text boxes')
     }
     if (/^xl\/worksheets\/sheet.*\.xml$/i.test(name)) {
-      if (/<(?:\w+:)?conditionalFormatting\b/.test(text())) unsupported('conditional formatting')
+      if (/<(?:\w+:)?conditionalFormatting\b/.test(readEntry(file))) unsupported('conditional formatting')
     }
   }
+}
+
+const xmlAttribute = (tag: string, name: string): string | undefined =>
+  tag
+    .match(new RegExp(String.raw`\s${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`))
+    ?.slice(1)
+    .find((value) => value !== undefined)
+
+const worksheetXmlByName = (book: XLSX.WorkBook, files: Record<string, ArchiveEntry> | undefined) => {
+  const relationships = readEntry(files?.['xl/_rels/workbook.xml.rels'])
+  const targets = new Map<string, string>()
+  for (const relationship of relationships.match(/<(?:[\w.-]+:)?Relationship\s[^>]+>/g) ?? []) {
+    const id = xmlAttribute(relationship, 'Id')
+    const target = xmlAttribute(relationship, 'Target')
+    if (!id || !target || !xmlAttribute(relationship, 'Type')?.endsWith('/worksheet')) continue
+    const filename = target.startsWith('/') ? target.slice(1) : path.posix.join('xl', target)
+    targets.set(id, filename)
+  }
+  return new Map(
+    (book.Workbook?.Sheets ?? []).map((sheet) => {
+      const { id } = sheet as typeof sheet & { id?: string }
+      const target = id ? targets.get(id) : undefined
+      return [sheet.name, target ? readEntry(files?.[target]) : '']
+    })
+  )
 }
 
 const fontPath = (bold: boolean): string => {
@@ -97,14 +146,67 @@ const fontPath = (bold: boolean): string => {
   return font
 }
 
-export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promise<Buffer> => {
+const renderPageText = async (value: string | undefined, scale: number) => {
+  const sections = { L: '', C: '', R: '' }
+  let section: keyof typeof sections = 'C'
+  let fontFamily = 'Tahoma'
+  let fontSize = 11
+  let fontStyle = ''
+  for (const token of (value ?? '').match(/&"[^"]*"|&\d+|&[A-Za-z&]|[^&]+|&/g) ?? []) {
+    if (token === '&L' || token === '&C' || token === '&R') {
+      section = token[1] as keyof typeof sections
+      fontFamily = 'Tahoma'
+      fontSize = 11
+      fontStyle = ''
+    } else if (token.startsWith('&"')) {
+      const [family, style] = token
+        .slice(2, -1)
+        .replace(/[！-～]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+        .split(',')
+      fontFamily = family || 'Tahoma'
+      fontStyle = (style?.match(/bold|italic/gi) ?? []).join(' ')
+    } else if (/^&\d/.test(token)) {
+      fontSize = Math.min(72, Math.max(5, Number(token.slice(1))))
+    } else if (token === '&&' || !token.startsWith('&')) {
+      const content = token === '&&' ? '&' : token
+      const size = Math.round(fontSize * scale * 1024)
+      sections[section] += '<span font_desc="' + xml([fontFamily, fontStyle].filter(Boolean).join(' ')) + '" size="' + size + '">' + xml(content) + '</span>'
+    } else {
+      unsupported('header or footer fields')
+    }
+  }
+  return Promise.all(
+    (Object.keys(sections) as (keyof typeof sections)[]).map(async (align) => {
+      const markup = sections[align]
+      if (!markup.replace(/<[^>]+>/g, '').trim()) return null
+      const { data: png, info } = await sharp({
+        text: {
+          text: markup,
+          font: 'Tahoma',
+          fontfile: fontPath(false),
+          dpi: DPI,
+          rgba: true,
+          align: align === 'C' ? 'centre' : align === 'R' ? 'right' : 'left',
+        },
+      })
+        .png()
+        .toBuffer({ resolveWithObject: true })
+      return { align, uri: 'data:image/png;base64,' + png.toString('base64'), width: (info.width * 72) / DPI, height: (info.height * 72) / DPI }
+    })
+  )
+}
+
+export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promise<{ pdfBytes: Buffer; pageClassifications: PageClassification[] }> => {
   // Read cached display values. No workbook macros, external links or formulas execute.
   const data = XLSX.read(bytes, { type: 'buffer', cellStyles: true, cellNF: true, cellText: true, bookFiles: true })
-  validateArchive(data)
+  const files = (data as XLSX.WorkBook & { files?: Record<string, ArchiveEntry> }).files
+  validateArchive(files)
+  const worksheetXml = worksheetXmlByName(data, files)
   const workbook = path.extname(fileName).toLowerCase() === '.xlsx' ? new ExcelJS.Workbook() : legacyWorkbook(data)
   if (path.extname(fileName).toLowerCase() === '.xlsx') await workbook.xlsx.load(bytes as unknown as ExcelJS.Buffer)
   if (workbook.worksheets.length > 30) throw new Error('Excel exceeds 30 worksheets')
   const pdf = await PDFDocument.create()
+  const pageClassifications: PageClassification[] = []
   const textCache = new Map<string, Promise<TextData>>()
   let cellCount = 0
 
@@ -112,7 +214,19 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
     if (sheet.state !== 'visible') continue
     const source = data.Sheets[sheet.name]
     if (!sheet.actualRowCount && !sheet.getImages().length) continue
-    if (Object.values(sheet.headerFooter ?? {}).some((value) => typeof value === 'string' && value.length)) unsupported('headers or footers')
+    const headerFooter = sheet.headerFooter
+    if (headerFooter?.differentFirst || headerFooter?.differentOddEven) unsupported('first-page or even-page headers or footers')
+    const sheetXml = worksheetXml.get(sheet.name) ?? ''
+    const headerSettings = sheetXml.match(/<(?:[\w.-]+:)?headerFooter\b[^>]*>/)?.[0] ?? ''
+    const scaleHeaderFooter = !['0', 'false'].includes(xmlAttribute(headerSettings, 'scaleWithDoc') ?? '')
+    const alignHeaderFooter = !['0', 'false'].includes(xmlAttribute(headerSettings, 'alignWithMargins') ?? '')
+    const colBreaks: number[] = []
+    const columnBreaksXml = sheetXml.match(/<(?:[\w.-]+:)?colBreaks\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?colBreaks\s*>/)?.[1]
+    for (const columnBreak of columnBreaksXml?.match(/<(?:[\w.-]+:)?brk\b[^>]*>/g) ?? []) {
+      if (!['1', 'true'].includes(xmlAttribute(columnBreak, 'man') ?? '')) continue
+      const id = Number(xmlAttribute(columnBreak, 'id'))
+      if (Number.isInteger(id) && id > 0) colBreaks.push(id)
+    }
     if (sheet.pageSetup.printTitlesRow || sheet.pageSetup.printTitlesColumn) unsupported('repeated print titles')
     const ranges = sheet.pageSetup.printArea ? sheet.pageSetup.printArea.split('&&') : []
     const rowSize = (index: number) => (sheet.getRow(index).hidden ? 0 : sheet.getRow(index).height || sheet.properties.defaultRowHeight || 15)
@@ -176,10 +290,13 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
       let [width, height] = sizes[paperSize]
       if (sheet.pageSetup.orientation === 'landscape') [width, height] = [height, width]
       const margins = sheet.pageSetup.margins
-      const left = (margins?.left ?? 0.5) * 72,
-        top = (margins?.top ?? 0.5) * 72
-      const usableWidth = width - left - (margins?.right ?? 0.5) * 72
+      const left = (margins?.left ?? 0.5) * 72
+      const right = (margins?.right ?? 0.5) * 72
+      const usableWidth = width - left - right
+      const top = (margins?.top ?? 0.5) * 72
       const usableHeight = height - top - (margins?.bottom ?? 0.5) * 72
+      const headerY = (margins?.header ?? 0.3) * 72
+      const footerY = height - (margins?.footer ?? 0.3) * 72
       if (usableWidth <= 0 || usableHeight <= 0) throw new Error('Excel page margins leave no printable area')
       let scale = Math.min(4, Math.max(0.1, (sheet.pageSetup.scale || 100) / 100))
       if (sheet.pageSetup.fitToPage) {
@@ -190,8 +307,26 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
         )
       }
       if (scale < 0.1) unsupported('print scale below 10%')
-      const rowGroups = partition(rows, usableHeight / scale, new Set(sheet.model.rowBreaks?.map((item) => item.id)))
-      const colGroups = partition(columns, usableWidth / scale)
+      const [header, footer] = await Promise.all([
+        renderPageText(headerFooter?.oddHeader, scaleHeaderFooter ? scale : 1),
+        renderPageText(headerFooter?.oddFooter, scaleHeaderFooter ? scale : 1),
+      ])
+      const pageText = [...header, ...footer]
+        .map((item, index) => {
+          if (!item) return ''
+          const textLeft = alignHeaderFooter ? left : 0
+          const textRight = alignHeaderFooter ? width - right : width
+          const x = item.align === 'L' ? textLeft : item.align === 'R' ? textRight - item.width : (textLeft + textRight - item.width) / 2
+          const y = index < header.length ? headerY : footerY - item.height
+          return '<image x="' + x + '" y="' + y + '" width="' + item.width + '" height="' + item.height + '" href="' + item.uri + '"/>'
+        })
+        .join('')
+      const rowGroups = partition(
+        rows,
+        usableHeight / scale,
+        sheet.model.rowBreaks?.map((item) => item.id)
+      )
+      const colGroups = partition(columns, usableWidth / scale, sheet.pageSetup.fitToPage ? undefined : colBreaks)
       const pages =
         sheet.pageSetup.pageOrder === 'overThenDown'
           ? rowGroups.flatMap((row) => colGroups.map((col) => ({ row, col })))
@@ -200,10 +335,12 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
       const merges = source?.['!merges'] ?? []
       const sourceX = Array.from({ length: area.s.c }, (_, i) => colSize(i + 1)).reduce((a, b) => a + b, 0)
       const sourceY = Array.from({ length: area.s.r }, (_, i) => rowSize(i + 1)).reduce((a, b) => a + b, 0)
+      const previousTypeByColumn = new Map<Segment[], PageClassification>()
 
       for (const { row, col } of pages) {
         const shapes: string[] = []
         const images: string[] = []
+        const headingCells: string[] = []
         const drawn = new Set<string>()
         const offsetX = col[0].start,
           offsetY = row[0].start
@@ -249,11 +386,13 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
             }
             const cached = source?.[master.address] as XLSX.CellObject | undefined
             const cellValue = master.value
-            if (cellValue && typeof cellValue === 'object' && ('formula' in cellValue || 'sharedFormula' in cellValue) && cellValue.result === undefined)
+            // ExcelJS omits some cached values (including numeric zero) that SheetJS retains.
+            if (cellValue && typeof cellValue === 'object' && ('formula' in cellValue || 'sharedFormula' in cellValue) && cached?.v === undefined && cellValue.result === undefined)
               unsupported('formula without a saved result')
             if (cached?.f && cached.v === undefined) unsupported('formula without a saved result')
             const value = cached?.w ?? master.text
-            if (!value) continue
+            if (!value.trim()) continue
+            if (x >= 0 && y >= 0 && y * scale + top <= height * 0.35) headingCells.push(value)
             const alignment = master.alignment ?? {}
             if (alignment.textRotation) unsupported('rotated cell text')
             const font = master.font ?? {}
@@ -306,15 +445,19 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
             <rect x="${px}" y="${py}" width="${Math.min(usableWidth, drawWidth)}" height="${Math.min(usableHeight, drawHeight)}"/>
           </clipPath></defs><g clip-path="url(#page)">
             <g transform="translate(${px} ${py}) scale(${scale})">${shapes.join('')}${images.join('')}</g>
-          </g></svg>`
+          </g>${pageText}</svg>`
         let render = sharp(Buffer.from(svg), { limitInputPixels: 60_000_000 })
         if (sheet.pageSetup.blackAndWhite) render = render.grayscale()
         const image = await pdf.embedPng(await render.png().toBuffer())
         const page = pdf.addPage([width, height])
         page.drawImage(image, { x: 0, y: 0, width, height })
+        // With no new heading, retain the preceding page's type in this print column.
+        const classification = classifyDocumentHeadings(headingCells, previousTypeByColumn.get(col))
+        previousTypeByColumn.set(col, classification)
+        pageClassifications.push(classification)
       }
     }
   }
   if (!pdf.getPageCount()) throw new Error('Excel workbook has no visible printable worksheets')
-  return Buffer.from(await pdf.save())
+  return { pdfBytes: Buffer.from(await pdf.save()), pageClassifications }
 }

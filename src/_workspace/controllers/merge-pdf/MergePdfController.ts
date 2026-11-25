@@ -125,7 +125,12 @@ export const MergePdfController = {
       const enabled = await MergePdfDataService.getEnabledCategoryIds()
       const categoryId = combined ? 10 : categoryIdField.default(10).parse(req.body.categoryId)
       if (!enabled.has(categoryId)) throw new Error('The selected document type is no longer enabled')
-      const classifications = combined ? await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount, enabled) : null
+      let classifications = combined ? await classifyCombinedPdf(normalized.pdfBytes, normalized.pageCount, enabled) : null
+      if (req.body.detectExcelPages === 'true' && normalized.pageClassifications?.some(page => page.source === 'AUTO_TEXT' && enabled.has(page.categoryId))) {
+        classifications = normalized.pageClassifications.map(page =>
+          enabled.has(page.categoryId) ? page : { categoryId: 10, source: 'UNKNOWN', confidence: null }
+        )
+      }
       const entryPages = Array.from({ length: normalized.pageCount }, (_, index) => index + 1).filter((number) => (classifications?.[number - 1].categoryId ?? categoryId) === 1)
       const confirmed = normalized.sourceType === 'PDF' && (await detectEntryStatus04(normalized.pdfBytes, entryPages))
       const images = await renderPdfThumbnails(normalized.pdfBytes, normalized.pageCount)
