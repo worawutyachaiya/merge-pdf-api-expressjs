@@ -152,13 +152,18 @@ const excelFont = () => {
     if (existsSync(regular) && existsSync(bold)) return { family: 'Tahoma', regular, bold, italic: regular, boldItalic: bold }
   }
 
-  const bundledDir = path.resolve(__dirname, '../../../../assets/excel-fonts')
-  const regular = path.join(bundledDir, 'Sarabun-Regular.ttf')
-  const bold = path.join(bundledDir, 'Sarabun-Bold.ttf')
-  const italic = path.join(bundledDir, 'Sarabun-Italic.ttf')
-  const boldItalic = path.join(bundledDir, 'Sarabun-BoldItalic.ttf')
-  if (![regular, bold, italic, boldItalic].every(existsSync)) throw new Error('Excel conversion is unavailable: bundled Sarabun fonts are missing')
-  return { family: 'Sarabun', regular, bold, italic, boldItalic }
+  const bundledDirs = [
+    path.resolve(__dirname, '../../../assets/excel-fonts'),
+    path.resolve(__dirname, '../../../../assets/excel-fonts'),
+  ]
+  for (const bundledDir of bundledDirs) {
+    const regular = path.join(bundledDir, 'Sarabun-Regular.ttf')
+    const bold = path.join(bundledDir, 'Sarabun-Bold.ttf')
+    const italic = path.join(bundledDir, 'Sarabun-Italic.ttf')
+    const boldItalic = path.join(bundledDir, 'Sarabun-BoldItalic.ttf')
+    if ([regular, bold, italic, boldItalic].every(existsSync)) return { family: 'Sarabun', regular, bold, italic, boldItalic }
+  }
+  throw new Error('Excel conversion is unavailable: bundled Sarabun fonts are missing')
 }
 
 const renderPageText = async (value: string | undefined, scale: number, font: ReturnType<typeof excelFont>) => {
