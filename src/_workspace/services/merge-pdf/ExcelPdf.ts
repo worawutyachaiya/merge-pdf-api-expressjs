@@ -140,22 +140,37 @@ const worksheetXmlByName = (book: XLSX.WorkBook, files: Record<string, ArchiveEn
   )
 }
 
-const fontPath = (bold: boolean): string => {
-  const font = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', bold ? 'tahomabd.ttf' : 'tahoma.ttf')
-  if (!existsSync(font)) throw new Error('Excel conversion is unavailable: the existing Windows Tahoma font is missing')
-  return font
+const excelFont = () => {
+  const systemDirs = [
+    process.env.MERGE_PDF_SYSTEM_FONT_DIR?.trim(),
+    process.platform === 'win32' ? path.join(process.env.WINDIR || 'C:/Windows', 'Fonts') : undefined,
+  ]
+  for (const systemDir of systemDirs) {
+    if (!systemDir) continue
+    const regular = path.resolve(systemDir, 'tahoma.ttf')
+    const bold = path.resolve(systemDir, 'tahomabd.ttf')
+    if (existsSync(regular) && existsSync(bold)) return { family: 'Tahoma', regular, bold, italic: regular, boldItalic: bold }
+  }
+
+  const bundledDir = path.resolve(__dirname, '../../../../assets/excel-fonts')
+  const regular = path.join(bundledDir, 'Sarabun-Regular.ttf')
+  const bold = path.join(bundledDir, 'Sarabun-Bold.ttf')
+  const italic = path.join(bundledDir, 'Sarabun-Italic.ttf')
+  const boldItalic = path.join(bundledDir, 'Sarabun-BoldItalic.ttf')
+  if (![regular, bold, italic, boldItalic].every(existsSync)) throw new Error('Excel conversion is unavailable: bundled Sarabun fonts are missing')
+  return { family: 'Sarabun', regular, bold, italic, boldItalic }
 }
 
-const renderPageText = async (value: string | undefined, scale: number) => {
+const renderPageText = async (value: string | undefined, scale: number, font: ReturnType<typeof excelFont>) => {
   const sections = { L: '', C: '', R: '' }
   let section: keyof typeof sections = 'C'
-  let fontFamily = 'Tahoma'
+  let fontFamily = font.family
   let fontSize = 11
   let fontStyle = ''
   for (const token of (value ?? '').match(/&"[^"]*"|&\d+|&[A-Za-z&]|[^&]+|&/g) ?? []) {
     if (token === '&L' || token === '&C' || token === '&R') {
       section = token[1] as keyof typeof sections
-      fontFamily = 'Tahoma'
+      fontFamily = font.family
       fontSize = 11
       fontStyle = ''
     } else if (token.startsWith('&"')) {
@@ -163,7 +178,7 @@ const renderPageText = async (value: string | undefined, scale: number) => {
         .slice(2, -1)
         .replace(/[！-～]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
         .split(',')
-      fontFamily = family || 'Tahoma'
+      if (font.family === 'Tahoma') fontFamily = family || font.family
       fontStyle = (style?.match(/bold|italic/gi) ?? []).join(' ')
     } else if (/^&\d/.test(token)) {
       fontSize = Math.min(72, Math.max(5, Number(token.slice(1))))
@@ -182,8 +197,8 @@ const renderPageText = async (value: string | undefined, scale: number) => {
       const { data: png, info } = await sharp({
         text: {
           text: markup,
-          font: 'Tahoma',
-          fontfile: fontPath(false),
+          font: font.family,
+          fontfile: font.regular,
           dpi: DPI,
           rgba: true,
           align: align === 'C' ? 'centre' : align === 'R' ? 'right' : 'left',
@@ -205,6 +220,7 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
   const workbook = path.extname(fileName).toLowerCase() === '.xlsx' ? new ExcelJS.Workbook() : legacyWorkbook(data)
   if (path.extname(fileName).toLowerCase() === '.xlsx') await workbook.xlsx.load(bytes as unknown as ExcelJS.Buffer)
   if (workbook.worksheets.length > 30) throw new Error('Excel exceeds 30 worksheets')
+  const renderFont = excelFont()
   const pdf = await PDFDocument.create()
   const pageClassifications: PageClassification[] = []
   const textCache = new Map<string, Promise<TextData>>()
@@ -308,8 +324,8 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
       }
       if (scale < 0.1) unsupported('print scale below 10%')
       const [header, footer] = await Promise.all([
-        renderPageText(headerFooter?.oddHeader, scaleHeaderFooter ? scale : 1),
-        renderPageText(headerFooter?.oddFooter, scaleHeaderFooter ? scale : 1),
+        renderPageText(headerFooter?.oddHeader, scaleHeaderFooter ? scale : 1, renderFont),
+        renderPageText(headerFooter?.oddFooter, scaleHeaderFooter ? scale : 1, renderFont),
       ])
       const pageText = [...header, ...footer]
         .map((item, index) => {
@@ -399,6 +415,7 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
             const fontSize = Math.min(72, Math.max(5, font.size || 11))
             const textWidth = Math.max(1, Math.ceil(((w - 4) * DPI) / 72))
             const horizontal = alignment.horizontal ?? (cached?.t === 'n' ? 'right' : 'left')
+            const face = font.bold ? (font.italic ? renderFont.boldItalic : renderFont.bold) : (font.italic ? renderFont.italic : renderFont.regular)
             const decoration = `${font.underline ? ' underline="single"' : ''}${font.strike ? ' strikethrough="true"' : ''}`
             const markup = `<span foreground="${hexColor(font.color, '#000000')}"${decoration}>${xml(value)}</span>`
             const textKey = JSON.stringify([markup, fontSize, font.bold, font.italic, textWidth, alignment.wrapText, horizontal])
@@ -409,8 +426,8 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
                   const { data: png, info } = await sharp({
                     text: {
                       text: markup,
-                      font: `Tahoma ${font.bold ? 'Bold ' : ''}${font.italic ? 'Italic ' : ''}${fontSize}`,
-                      fontfile: fontPath(!!font.bold),
+                      font: `${renderFont.family} ${font.bold ? 'Bold ' : ''}${font.italic ? 'Italic ' : ''}${fontSize}`,
+                      fontfile: face,
                       width: textWidth,
                       wrap: alignment.wrapText ? 'word-char' : 'none',
                       align: horizontal === 'center' ? 'centre' : horizontal === 'right' ? 'right' : 'left',

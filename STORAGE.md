@@ -43,7 +43,9 @@ search in the JSON body. The editor lists its system fonts with GET. Uploads use
 and PDF/source downloads return binary responses to POST requests.
 
 Install API dependencies with `pnpm install` and use Node.js >=22.13 (Node.js 24 recommended).
-PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion also requires Windows Tahoma fonts.
+PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion uses Tahoma when its regular and bold faces are available in the configured system font directory or the Windows Fonts directory. Otherwise it uses the Sarabun fonts in `assets/excel-fonts`. Include this directory and its license alongside `dist` when deploying the API.
+
+The bundled Sarabun files are from [Google Fonts](https://github.com/google/fonts/tree/e774067705989f0bcb5e32eb0e8f76c24d679f92/ofl/sarabun).
 
 Set MERGE_PDF_OUTPUT_DIR to the output folder. The current environment files specify
 `\\192.168.14.35\C12_PM-Support\MergePDF_TEST`. The account running the API needs permission
