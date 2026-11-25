@@ -154,7 +154,7 @@ const excelFont = () => {
 
   const bundledDirs = [
     path.resolve(__dirname, '../../../assets/excel-fonts'),
-    path.resolve(__dirname, '../../../../assets/excel-fonts'),
+    path.resolve(__dirname, '../../../../src/assets/excel-fonts'),
   ]
   for (const bundledDir of bundledDirs) {
     const regular = path.join(bundledDir, 'Sarabun-Regular.ttf')

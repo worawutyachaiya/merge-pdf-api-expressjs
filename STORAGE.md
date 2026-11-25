@@ -43,7 +43,9 @@ search in the JSON body. The editor lists its system fonts with GET. Uploads use
 and PDF/source downloads return binary responses to POST requests.
 
 Install API dependencies with `pnpm install` and use Node.js >=22.13 (Node.js 24 recommended).
-PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion uses Tahoma when its regular and bold faces are available in the configured system font directory or the Windows Fonts directory. Otherwise it uses Sarabun. The API build scripts copy the fonts and license to `dist/assets/excel-fonts`. Deploy the complete `dist` directory.
+PDF thumbnails use PDF.js and @napi-rs/canvas. Excel conversion uses Tahoma when its regular and bold faces are available in the configured system font directory or the Windows Fonts directory. Otherwise it uses Sarabun from `src/assets/excel-fonts`.
+
+When building on the server, upload the full `src` directory, including `src/assets/excel-fonts`, and keep it alongside `dist`. The compiled API reads fonts from `src` if its build output contains no fonts. The API build scripts also copy the fonts and license to `dist/assets/excel-fonts` for deployments that ship the complete `dist` directory.
 
 The bundled Sarabun files are from [Google Fonts](https://github.com/google/fonts/tree/e774067705989f0bcb5e32eb0e8f76c24d679f92/ofl/sarabun).
 
