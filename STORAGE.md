@@ -28,6 +28,8 @@ Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_hawb_and_category_en
 
 Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_stamp_style.sql` once to existing databases before deploying index formatting. Remarks and cover rectangles use the existing page annotations column.
 
+Apply `src/_workspace/sql/merge-pdf/migrations/20261126_set_default_stamp_font_size.sql` to set the first-page index font size to 25 pt for new jobs. Existing jobs keep their saved sizes.
+
 The Windows fonts in the editor use the font faces installed on the device. For Index exports, the API also needs the same embeddable faces. It reads the installed Windows Fonts directory by default. `MERGE_PDF_SYSTEM_FONT_DIR` can point to another directory containing locally installed, licensed faces.
 
 Set `MERGE_PDF_SYSTEM_FONT_DIR` in the deployed API's environment for the target mode. The account that runs the API must be able to read that directory. Restart the API after the change. If passing the variable from the shell, use `pm2 restart <app> --update-env`. Check `GET /merge-pdf/editor/system-fonts` for the available faces before testing Index export. Remarks use the device's fonts.

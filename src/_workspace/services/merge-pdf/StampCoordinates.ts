@@ -9,6 +9,7 @@ export interface StampCoordinates {
 
 export const STAMP_COORDINATE_MIN = -1
 export const STAMP_COORDINATE_MAX = 2
+export const DEFAULT_STAMP_FONT_SIZE = 25
 export const stampVerticalMetrics = (size: number, style: TextStyle) => {
   const family = style.fontFamily ?? 'sans'
   const standard = isStandardFont(family)
@@ -35,6 +36,6 @@ export const jobStampCoordinates = (job: {
 }): StampCoordinates => ({
   x: job.STAMP_X ?? 1,
   y: job.STAMP_Y ?? 0,
-  fontSize: job.STAMP_FONT_SIZE ?? 10,
+  fontSize: job.STAMP_FONT_SIZE ?? DEFAULT_STAMP_FONT_SIZE,
   style: job.STAMP_STYLE ?? undefined,
 })

@@ -5,7 +5,7 @@ import { createCanvas } from '@napi-rs/canvas'
 import fontkit from '@pdf-lib/fontkit'
 import { PDFDocument, PDFName, PDFNumber, degrees, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix, type PDFPage, type PDFImage } from 'pdf-lib'
 import sharp from 'sharp'
-import { STAMP_COORDINATE_MAX, STAMP_COORDINATE_MIN, stampVerticalMetrics, stampOffset, type StampCoordinates } from './StampCoordinates'
+import { DEFAULT_STAMP_FONT_SIZE, STAMP_COORDINATE_MAX, STAMP_COORDINATE_MIN, stampVerticalMetrics, stampOffset, type StampCoordinates } from './StampCoordinates'
 import type { PageAnnotation, PageCover } from './PageAnnotations'
 import { loadPdfJs } from './PdfJs'
 import { isStandardFont, isSystemFont, type TextStyle } from './TextFormatting'
@@ -283,7 +283,7 @@ const drawDocumentName = async (pdf: PDFDocument, name: string, position: StampC
   const page = pdf.getPage(0)
   const style = position.style ?? {}
   const font = await embedIndexFont(pdf, style)
-  const size = position.fontSize ?? 10
+  const size = position.fontSize ?? DEFAULT_STAMP_FONT_SIZE
   if (!Number.isFinite(size) || size < 6 || size > 48) throw new Error('Stamp size must be between 6 and 48 pt')
   const width = font.widthOfTextAtSize(name, size)
   const { width: visualWidth, height: visualHeight, rotation, toPdf } = visualPageGeometry(page)
