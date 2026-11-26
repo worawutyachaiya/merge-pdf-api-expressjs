@@ -12,6 +12,7 @@ import { classifyDocumentHeadings } from './CombinedPdfClassification'
 const DPI = 144
 const MAX_CELLS = 20_000
 const MAX_PAGES = 100
+const MAX_PRINT_HEIGHT_ADJUSTMENT = 0.03
 const xml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 function unsupported(feature: string): never {
   throw new Error(`Excel ${feature} is not supported by this converter. Export this workbook to PDF from Excel before importing.`)
@@ -120,6 +121,17 @@ const xmlAttribute = (tag: string, name: string): string | undefined =>
     .match(new RegExp(String.raw`\s${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`))
     ?.slice(1)
     .find((value) => value !== undefined)
+
+const manualPageBreaks = (sheetXml: string, axis: 'row' | 'col'): number[] => {
+  const breaksXml = sheetXml.match(new RegExp(String.raw`<(?:[\w.-]+:)?${axis}Breaks\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?${axis}Breaks\s*>`))?.[1]
+  const breaks: number[] = []
+  for (const tag of breaksXml?.match(/<(?:[\w.-]+:)?brk\b[^>]*>/g) ?? []) {
+    if (!['1', 'true'].includes(xmlAttribute(tag, 'man') ?? '')) continue
+    const id = Number(xmlAttribute(tag, 'id'))
+    if (Number.isInteger(id) && id > 0) breaks.push(id)
+  }
+  return breaks
+}
 
 const worksheetXmlByName = (book: XLSX.WorkBook, files: Record<string, ArchiveEntry> | undefined) => {
   const relationships = readEntry(files?.['xl/_rels/workbook.xml.rels'])
@@ -241,13 +253,8 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
     const headerSettings = sheetXml.match(/<(?:[\w.-]+:)?headerFooter\b[^>]*>/)?.[0] ?? ''
     const scaleHeaderFooter = !['0', 'false'].includes(xmlAttribute(headerSettings, 'scaleWithDoc') ?? '')
     const alignHeaderFooter = !['0', 'false'].includes(xmlAttribute(headerSettings, 'alignWithMargins') ?? '')
-    const colBreaks: number[] = []
-    const columnBreaksXml = sheetXml.match(/<(?:[\w.-]+:)?colBreaks\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?colBreaks\s*>/)?.[1]
-    for (const columnBreak of columnBreaksXml?.match(/<(?:[\w.-]+:)?brk\b[^>]*>/g) ?? []) {
-      if (!['1', 'true'].includes(xmlAttribute(columnBreak, 'man') ?? '')) continue
-      const id = Number(xmlAttribute(columnBreak, 'id'))
-      if (Number.isInteger(id) && id > 0) colBreaks.push(id)
-    }
+    const rowBreaks = sheet.pageSetup.fitToPage ? [] : manualPageBreaks(sheetXml, 'row')
+    const colBreaks = sheet.pageSetup.fitToPage ? [] : manualPageBreaks(sheetXml, 'col')
     if (sheet.pageSetup.printTitlesRow || sheet.pageSetup.printTitlesColumn) unsupported('repeated print titles')
     const ranges = sheet.pageSetup.printArea ? sheet.pageSetup.printArea.split('&&') : []
     const rowSize = (index: number) => (sheet.getRow(index).hidden ? 0 : sheet.getRow(index).height || sheet.properties.defaultRowHeight || 15)
@@ -326,6 +333,11 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
           sheet.pageSetup.fitToWidth ? (usableWidth * sheet.pageSetup.fitToWidth) / total(columns) : 1,
           sheet.pageSetup.fitToHeight ? (usableHeight * sheet.pageSetup.fitToHeight) / total(rows) : 1
         )
+      } else if (sheet.pageSetup.printArea && !rowBreaks.length) {
+        // Excel and the converter round print metrics differently. Absorb small vertical
+        // overflows in an explicit print area instead of creating a short continuation page.
+        const fitHeightScale = usableHeight / total(rows)
+        if (fitHeightScale >= scale * (1 - MAX_PRINT_HEIGHT_ADJUSTMENT)) scale = Math.min(scale, fitHeightScale)
       }
       if (scale < 0.1) unsupported('print scale below 10%')
       const [header, footer] = await Promise.all([
@@ -342,12 +354,8 @@ export const convertExcelToPdf = async (fileName: string, bytes: Buffer): Promis
           return '<image x="' + x + '" y="' + y + '" width="' + item.width + '" height="' + item.height + '" href="' + item.uri + '"/>'
         })
         .join('')
-      const rowGroups = partition(
-        rows,
-        usableHeight / scale,
-        sheet.model.rowBreaks?.map((item) => item.id)
-      )
-      const colGroups = partition(columns, usableWidth / scale, sheet.pageSetup.fitToPage ? undefined : colBreaks)
+      const rowGroups = partition(rows, usableHeight / scale, rowBreaks)
+      const colGroups = partition(columns, usableWidth / scale, colBreaks)
       const pages =
         sheet.pageSetup.pageOrder === 'overThenDown'
           ? rowGroups.flatMap((row) => colGroups.map((col) => ({ row, col })))
