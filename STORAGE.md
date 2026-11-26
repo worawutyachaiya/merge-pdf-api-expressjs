@@ -28,7 +28,7 @@ Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_hawb_and_category_en
 
 Apply `src/_workspace/sql/merge-pdf/migrations/20261119_add_stamp_style.sql` once to existing databases before deploying index formatting. Remarks and cover rectangles use the existing page annotations column.
 
-Apply `src/_workspace/sql/merge-pdf/migrations/20261126_set_default_stamp_font_size.sql` to set the database default for the first-page index to 25 pt. Then apply `src/_workspace/sql/merge-pdf/migrations/20261126_update_draft_stamp_font_size.sql` once to update active drafts that still have 10 pt. This includes drafts where 10 pt was selected manually. Other sizes and completed jobs retain their saved values.
+The API stores a 25 pt first-page index font size when creating a job. Apply `src/_workspace/sql/merge-pdf/migrations/20261126_set_default_stamp_font_size.sql` to align the database default. Existing jobs retain their saved sizes.
 
 The Windows fonts in the editor use the font faces installed on the device. For Index exports, the API also needs the same embeddable faces. It reads the installed Windows Fonts directory by default. `MERGE_PDF_SYSTEM_FONT_DIR` can point to another directory containing locally installed, licensed faces.
 
