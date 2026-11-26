@@ -152,8 +152,8 @@ export const MergePdfSQL = {
   whereFileSequence: (): string => 'PREFIX = ?',
   incrementSequence: (): string => 'NEXT_VALUE + 1',
   whereJob: (): string => 'MERGE_PDF_JOB_ID = ?',
-  insertJob: (): string => `INSERT INTO MERGE_PDF_JOB (MERGE_PDF_JOB_CODE, MERGE_PDF_JOB_TITLE, MERGE_PDF_JOB_REFERENCE, CREATE_BY, UPDATE_BY)
-       VALUES (?, ?, ?, ?, ?)`,
+  insertJob: (): string => `INSERT INTO MERGE_PDF_JOB (MERGE_PDF_JOB_CODE, MERGE_PDF_JOB_TITLE, MERGE_PDF_JOB_REFERENCE, STAMP_FONT_SIZE, CREATE_BY, UPDATE_BY)
+       VALUES (?, ?, ?, ?, ?, ?)`,
   incrementRowVersion: (): string => 'ROW_VERSION + 1',
   savedJobStatus: (): string => "CASE WHEN LAST_COMPLETE_DATE IS NOT NULL THEN 'COMPLETED' ELSE STATUS END",
   softDeleteJob: (): string => `UPDATE MERGE_PDF_JOB SET INUSE = 0, IS_CURRENT = 1, ROW_VERSION = ROW_VERSION + 1, UPDATE_BY = ?

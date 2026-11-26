@@ -3,7 +3,7 @@ import { MergePdfSQL } from '@src/_workspace/sql/merge-pdf/MergePdfSQL'
 import { getAuditEmployeeCode } from '@src/_workspace/services/merge-pdf/AuditActor'
 import { FileSequenceInactiveError } from '@src/_workspace/services/merge-pdf/ImportFileName'
 import { rotatePageCovers } from './PageAnnotations'
-import type { StampCoordinates } from './StampCoordinates'
+import { DEFAULT_STAMP_FONT_SIZE, type StampCoordinates } from './StampCoordinates'
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
 import { MySQLExecute } from '@src/businessData/dbExecute'
@@ -301,7 +301,8 @@ export const MergePdfDataService = {
   },
 
   insertJob: async (conn: PoolConnection, code: string, title: string, reference: string | null): Promise<number> => {
-    const [result] = await conn.query<ResultSetHeader>(MergePdfSQL.insertJob(), [code, title, reference, getAuditEmployeeCode(), getAuditEmployeeCode()])
+    const employeeCode = getAuditEmployeeCode()
+    const [result] = await conn.query<ResultSetHeader>(MergePdfSQL.insertJob(), [code, title, reference, DEFAULT_STAMP_FONT_SIZE, employeeCode, employeeCode])
     return result.insertId
   },
 
